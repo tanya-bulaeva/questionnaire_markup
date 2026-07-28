@@ -1,0 +1,16 @@
+.agents/
+.codex/
+история/
+примеры/
+
+*.docx
+*.xlsx
+*.xls
+*.xlsm
+*.csv
+*.tsv
+
+compare-regression-report.json
+*.log
+.DS_Store
+Thumbs.db
