@@ -5938,6 +5938,7 @@ final: ${escapeHtml(draft.final_code || "")}
       const sections = [];
       const consumedQuestionIds = new Set();
       const exportedQuestionIds = new Set();
+      const screenAfterQuestionId = qscreenAfterQuestionId();
       state.questions.forEach((q, index) => {
         if (consumedQuestionIds.has(q.id)) return;
         if (q.status === "ignored") return;
@@ -5969,6 +5970,9 @@ final: ${escapeHtml(draft.final_code || "")}
         }
         if (blocks.length) {
           sections.push(...blocks.filter(Boolean));
+          if (!state.expressMode && q.id === screenAfterQuestionId) {
+            sections.push(buildScreenQuestionBlock());
+          }
           exportedQuestionIds.add(q.id);
         }
       });
@@ -5976,6 +5980,15 @@ final: ${escapeHtml(draft.final_code || "")}
         sections.push(buildControlQuestionBlock());
       }
       return normalizeScriptDashes(sections.join("\n\n"));
+    }
+
+    function qscreenAfterQuestionId() {
+      const questions = state.questions || [];
+      const birthIndex = questions.findIndex(q => q.status !== "ignored" && isBirthDateQuestion(q));
+      if (birthIndex < 0) return null;
+      const genderIndex = questions.findIndex(q => q.status !== "ignored" && isGenderQuestion(q));
+      const targetIndex = genderIndex >= 0 ? Math.max(genderIndex, birthIndex) : birthIndex;
+      return questions[targetIndex]?.id || null;
     }
 
     function refreshQuestionsForExport() {
@@ -6193,7 +6206,7 @@ final: ${escapeHtml(draft.final_code || "")}
 
     function qscreenGenderLine() {
       const genderQuestion = (state.questions || []).find(q => q.status !== "ignored" && isGenderQuestion(q));
-      const code = genderQuestion ? scriptQuestionCode(genderQuestion) : "QS1";
+      const code = genderQuestion ? scriptQuestionCode(genderQuestion) : "КОДВОПРОСАПОЛ";
       return genderQuestionHasFemaleFirst(genderQuestion)
         ? `$gender=($Qper[0] && $Qper[0]==$${code} ? false : true);`
         : `$gender=($Qper[0] && $Qper[0]!=$${code} ? false : true);`;
@@ -6226,9 +6239,6 @@ final: ${escapeHtml(draft.final_code || "")}
         }
         else if (isAgeIntervalQuestion(q) || hasAgeIntervalOptions(q)) {
           blocks.push(buildAgeIntervalQuestionBlock(q));
-        }
-        if (!state.expressMode) {
-          blocks.push(buildScreenQuestionBlock());
         }
         return blocks;
       }

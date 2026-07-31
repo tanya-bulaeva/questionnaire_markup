@@ -12,6 +12,7 @@
 *.tsv
 
 compare-regression-report.json
+GEO_RECOGNITION_NOTES.md
 *.log
 .DS_Store
 Thumbs.db
