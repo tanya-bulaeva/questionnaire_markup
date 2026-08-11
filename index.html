@@ -2538,11 +2538,13 @@
         const optionText = normalizeWhitespace(textBlock.text || "");
         if (!optionText || isSeparatedOptionServiceText(optionText) || /^\d{1,4}$/.test(optionText)) continue;
         const conditionBlock = nextSeparatedOptionConditionBlock(blocks, textBlock.index + 1);
+        const optionCondition = conditionBlock ? normalizeWhitespace(conditionBlock.text || "") : "";
         const option = {
           code: codeText,
           text: optionText,
           html_text: refHtml(textBlock.block.id, { mode: "option" }),
-          flags: inferOptionFlags(codeText, optionText),
+          condition: optionCondition,
+          flags: inferOptionFlags(codeText, [optionText, optionCondition].filter(Boolean).join(" ")),
           source_block: `${blocks[i].id}:${textBlock.block.id}`
         };
         options.push(option);
@@ -2679,24 +2681,72 @@
       return [...new Set((values || []).map(Number).filter(Number.isFinite))];
     }
 
+    function regularOptionHasInputMarker(text) {
+      return /(?:^|[^\p{L}\d_])(?:\u0443\u043a\u0430\u0436\u0438\u0442\u0435|\u0443\u0442\u043e\u0447\u043d\u0438\u0442\u0435|\u0432\u043f\u0438\u0448\u0438\u0442\u0435|\u043d\u0430\u043f\u0438\u0448\u0438\u0442\u0435|\u0437\u0430\u043f\u0438\u0448\u0438\u0442\u0435)(?=$|[^\p{L}\d_])/iu.test(String(text || ""));
+    }
+
+    function regularOptionHasExactInputHint(text) {
+      return /(?:^|[^\p{L}\d_])(?:\u043a\u0430\u043a(?:\u043e\u0439|\u0430\u044f|\u0438\u0435)\s+\u0438\u043c\u0435\u043d\u043d\u043e|\u0447\u0442\u043e\s+\u0438\u043c\u0435\u043d\u043d\u043e)(?=$|[^\p{L}\d_])/iu.test(String(text || ""));
+    }
+
+    function regularOptionHasOpenFieldMarker(text) {
+      const clean = normalizeWhitespace(stripExpressHtmlTags(text || ""));
+      if (!clean) return false;
+      return /(?:^|[^\p{L}\d_])(?:\u043e\u0442\u043a\u0440\u044b\u0442(?:\u044b\u0439|\u0430\u044f|\u043e\u0435|\u044b\u0435)?\s+(?:\u0442\u0435\u043a\u0441\u0442\u043e\u0432(?:\u043e\u0435|\u044b\u0435)?\s+)?\u043f\u043e\u043b(?:\u0435|\u044f)|\u043f\u043e\u043b(?:\u0435|\u044f)\s+\u0434\u043b\u044f\s+\u043e\u0442\u043a\u0440\u044b\u0442(?:\u043e\u0433\u043e|\u044b\u0445)?\s+(?:\u043a\u043e\u043c\u043c\u0435\u043d\u0442\u0430\u0440(?:\u0438\u044f|\u0438\u0435\u0432)|\u043e\u0442\u0432\u0435\u0442(?:\u0430|\u043e\u0432))|\u043e\u0442\u043a\u0440\u044b\u0442(?:\u044b\u0439|\u0430\u044f|\u043e\u0435|\u044b\u0435)?\s+\u043f\u043e\u043b(?:\u0435|\u044f)\s+\u0434\u043b\u044f\s+(?:\u043a\u043e\u043c\u043c\u0435\u043d\u0442\u0430\u0440(?:\u0438\u044f|\u0438\u0435\u0432)|\u043e\u0442\u0432\u0435\u0442(?:\u0430|\u043e\u0432))|\u043e\u0431\u044f\u0437\u0430\u0442\u0435\u043b\u044c\u043d(?:\u043e|\u044b\u0439|\u0430\u044f|\u043e\u0435)?\s+\u043f\u0440\u0438\s+\u0432\u044b\u0431\u043e\u0440\u0435)(?=$|[^\p{L}\d_])/iu.test(clean);
+    }
+
+    function regularOptionHasExplicitExclusiveMarker(text) {
+      const clean = normalizeWhitespace(stripExpressHtmlTags(text || ""));
+      if (!clean) return false;
+      return /(?:^|[^\p{L}\d_])(?:exclusive|\u0438\u0441\u043a\u043b\u044e\u0447\u0430\u044e\u0449(?:\u0438\u0439|\u0430\u044f|\u0435\u0435|\u0438\u0435|\u0438\u0445|\u0435\u0433\u043e|\u0435\u043c\u0443|\u0438\u043c)?(?:\s+\u0432\u0430\u0440\u0438\u0430\u043d\u0442\p{L}*)?)(?=$|[^\p{L}\d_])/iu.test(clean);
+    }
+
+    function regularOptionLooksNoneExclusive(text, code = "") {
+      const clean = normalizeWhitespace(stripExpressHtmlTags(text || "")).toLowerCase();
+      if (!clean) return false;
+      const normalizedCode = String(code || "").trim();
+      if (/(?:^|[^\p{L}\d_])(?:\u043d\u0438\u0447\u0435\u0433\u043e|\u043d\u0438\u043a\u0430\u043a(?:\u0438\u0435|\u0438\u0445|\u0438\u043c|\u0438\u043c\u0438)|\u043d\u0438\u043a\u043e\u043c\u0443|\u043d\u0438\u043a\u043e\u0433\u043e|\u043d\u0438\u043a\u0442\u043e|\u043d\u0438\s+\u043e\u0434\u0438\u043d|\u043d\u0438\s+\u0432\s+\u043a\u0430\u043a\p{L}*|\u043d\u0438\s+\u043d\u0430\s+\u043a\u0430\u043a\p{L}*)(?=$|[^\p{L}\d_])/iu.test(clean)) return true;
+      if (/(?:^|[^\p{L}\d_])(?:\u043d\u0435\s+\u0437\u043d\u0430\p{L}*|\u043d\u0435\s+\u043f\u043e\u043c\u043d\p{L}*|\u0437\u0430\u0442\u0440\u0443\u0434\u043d\p{L}*\s+\u043e\u0442\u0432\u0435\u0442\p{L}*|none of the above)(?=$|[^\p{L}\d_])/iu.test(clean)) return true;
+      if (/(?:^|[^\p{L}\d_])(?:\u043d\u0435\s+\u0441\u0442\u0430\u043b\u043a\p{L}*|\u043f\u0440\u0435\u043f\u044f\u0442\u0441\u0442\u0432\p{L}*\s+\u043d\u0435\u0442|\u043d\u0435\u0442\s+\u0437\u043d\u0430\u0447\u0438\u043c\p{L}*\s+\u043f\u0440\u0435\u043f\u044f\u0442\u0441\u0442\u0432\p{L}*|\u0440\u0435\u0430\u043b\u044c\u043d\p{L}*\s+\u043f\u043e\u043c\u043e\u0449\p{L}*\s+\u043d\u0435\u0442|\u043d\u0435\s+\u043f\u043e\u043b\u044c\u0437\p{L}*|\u043d\u0435\s+\u043f\u043e\u043a\u0443\u043f\p{L}*|\u043d\u0435\s+\u0434\u0435\u043b\p{L}*|\u043d\u0435\s+\u0441\u043b\u044b\u0448\p{L}*|\u043d\u0435\s+\u043f\u0440\u0438\u043d\u0438\u043c\p{L}*\s+\u0443\u0447\u0430\u0441\u0442\p{L}*)(?=$|[^\p{L}\d_])/iu.test(clean)) return true;
+      return /^(?:97|99|999|9999)$/.test(normalizedCode) && /(?:\u043d\u0435\s+\u0437\u043d\u0430\p{L}*|\u043d\u0435\s+\u043f\u043e\u043c\u043d\p{L}*|\u0437\u0430\u0442\u0440\u0443\u0434\u043d|\u043d\u0438\u0447\u0435\u0433\u043e|\u043d\u0438\u043a\u0430\u043a|none of the above)/iu.test(clean);
+    }
+
+    function isRegularShortOtherText(text) {
+      const clean = normalizeWhitespace(stripExpressHtmlTags(text || ""))
+        .replace(/^[\s"'\u00ab\u201c\u201e]+|[\s"'\u00bb\u201d:;.!?]+$/gu, "")
+        .toLowerCase();
+      return /^(?:\u0434\u0440\u0443\u0433(?:\u043e\u0435|\u043e\u0439|\u0430\u044f|\u0438\u0435)|\u0434\u0440\u0443\u0433\u0430\u044f\s+\u043f\u043e\u043c\u043e\u0449\u044c|\u0447\u0442\u043e-\u0442\u043e\s+\u0434\u0440\u0443\u0433\u043e\u0435|\u0441\u0432\u043e\u0439\s+\u0432\u0430\u0440\u0438\u0430\u043d\u0442)$/iu.test(clean);
+    }
+
+    function isRegularOtherOptionText(text, code = "") {
+      const clean = normalizeWhitespace(stripExpressHtmlTags(text || ""));
+      if (!clean) return false;
+      const normalizedCode = String(code || "").trim();
+      const tailCode = /^(?:97|98|997|998|999|981|982)$/.test(normalizedCode);
+      if (/(?:^|[^\p{L}\d_])\u0441\u0432\u043e\u0439\s+\u0432\u0430\u0440\u0438\u0430\u043d\u0442(?=$|[^\p{L}\d_])/iu.test(clean)) return true;
+      if (regularOptionHasInputMarker(clean) || regularOptionHasExactInputHint(clean)) return true;
+      if (regularOptionHasOpenFieldMarker(clean)) return true;
+      if (/(?:^|[^\p{L}\d_])\u043e\u0442\u043a\u0440\u044b\u0442(?:\u044b\u0439|\u0430\u044f|\u043e\u0435|\u044b\u0435)?(?:\s+(?:\u043e\u0442\u0432\u0435\u0442|\u0432\u043e\u043f\u0440\u043e\u0441))?(?=$|[^\p{L}\d_])/iu.test(clean)) return true;
+      return tailCode && isRegularShortOtherText(clean);
+    }
+
     function inferOptionFlags(code, text) {
-      const optionTextLooksOther = /(?:^|[^\p{L}\d_])(?:\u0434\u0440\u0443\u0433(?:\u043e\u0439|\u0430\u044f|\u043e\u0435|\u0438\u0435)|\u0434\u0440\u0443\u0433\u043e\u0435)(?=$|[^\p{L}\d_])/iu.test(String(text || ""));
-      const optionTextLooksExclusive = /(\u043d\u0438\u043a(?:\u0442\u043e|\u043e\u043c\u0443)|\u043d\u0438\s+\u043d\u0430\s+\u043e\u0434\u043d\p{L}*|\u043d\u0435\u0442\s+\u0442\u0430\u043a\p{L}*|\u043d\u0435\s+\u043f\u043e\u043b\u044c\u0437|\u043d\u0435\s+\u043f\u0440\u043e\u0432\u0435\u0440)/iu.test(String(text || ""));
       const flags = [];
       const normalizedCode = String(code || "").trim();
       const normalizedText = String(text || "").trim();
-      if (optionTextLooksOther) flags.push("other");
-      if (optionTextLooksExclusive) flags.push("exclusive");
+      if (isRegularOtherOptionText(normalizedText, normalizedCode)) flags.push("other");
+      if (regularOptionHasExplicitExclusiveMarker(normalizedText) || regularOptionLooksNoneExclusive(normalizedText, normalizedCode)) flags.push("exclusive");
       if (normalizedCode === "98" || /РґСЂСѓРіРѕРµ(?:\s*\((?:СѓС‚РѕС‡РЅРёС‚Рµ|СѓРєР°Р¶РёС‚Рµ)\))?/i.test(normalizedText)) flags.push("other");
-      if (normalizedCode === "99" || normalizedCode === "97" || /Р·Р°С‚СЂСѓРґРЅСЏСЋСЃСЊ|РЅРёС‡РµРіРѕ\s+РёР·\s+РїРµСЂРµС‡РёСЃР»РµРЅРЅРѕРіРѕ|none of the above/i.test(normalizedText)) flags.push("exclusive");
       if (/\bдругое\b/iu.test(normalizedText)) flags.push("other");
       if (/открыт(?:ый|ая|ое|ые)(?:\s+вопрос)?/iu.test(normalizedText)) flags.push("other");
-      if (/эксклюзив(?:ный|ная|ное|ные)?|\bexclusive\b/iu.test(normalizedText)) flags.push("exclusive");
-      if (/(\u044d\u043a\u0441\u043a\u043b\u044e\u0437\u0438\u0432|\u0437\u0430\u0442\u0440\u0443\u0434\u043d|\u043d\u0438\u0447\u0435\u0433\u043e|\u043d\u0435\s+\u0438\u043c\u0435\u0435\u0442|\u043d\u0435\s+\u0441\u043e\u0432\u0435\u0440\u0448|\u043d\u0435\s+\u0431\u0435\u0440\u0443|none of the above)/iu.test(normalizedText)) flags.push("exclusive");
+      if (!isRegularOtherOptionText(normalizedText, normalizedCode)) {
+        for (let index = flags.length - 1; index >= 0; index -= 1) {
+          if (flags[index] === "other") flags.splice(index, 1);
+        }
+      }
       if (["97", "98", "99"].includes(normalizedCode) || flags.includes("other") || flags.includes("exclusive")) flags.push("fix");
       return [...new Set(flags)];
     }
-
     function withGuaranteedOptionCodes(options) {
       return (options || []).map((option) => {
         const code = normalizeWhitespace(option?.code || "");
@@ -2961,6 +3011,29 @@
       return uniqueNumberList(codes);
     }
 
+    function extractRotationFixedCodes(q) {
+      const text = normalizeWhitespace(questionContextTexts(q).join(" "));
+      if (!text || !/(\u0440\u043e\u0442\u0430\u0446\u0438|\u0440\u043e\u0442\u0430\u0446|\u0440\u043e\u0442\u0438\u0440)/iu.test(text)) return [];
+      const codes = [
+        ...extractRotationExceptCodes(q),
+        ...extractRotationExceptCodesSafe(q)
+      ];
+      const patterns = [
+        /(?:\u043a\u043e\u0434(?:\u044b|\u0430|\u043e\u0432)?|\u0432\u0430\u0440\u0438\u0430\u043d\u0442(?:\u044b|\u0430|\u043e\u0432)?)\s+([\d,\s\u0438\-\u2013\u2014]+)\s+(?:\u0441\u0442\u043e\u044f\u0442|\u0434\u043e\u043b\u0436\u043d\p{L}*|\u043f\u043e\u043a\u0430\u0437\p{L}*)?\s*(?:\u043e\u0431\u043e\u0441\u043e\u0431\u043b\p{L}*|\u043e\u0442\u0434\u0435\u043b\u044c\p{L}*|\u0432\s+\u043a\u043e\u043d\u0446\u0435|\u0432\u043d\u0438\u0437\u0443|\u043f\u043e\u0441\u043b\u0435\u0434\u043d\p{L}*)/giu,
+        /(?:\u043e\u0431\u043e\u0441\u043e\u0431\u043b\p{L}*|\u043e\u0442\u0434\u0435\u043b\u044c\p{L}*|\u0432\s+\u043a\u043e\u043d\u0446\u0435|\u0432\u043d\u0438\u0437\u0443|\u043f\u043e\u0441\u043b\u0435\u0434\u043d\p{L}*)\s+(?:\u043a\u043e\u0434(?:\u044b|\u0430|\u043e\u0432)?|\u0432\u0430\u0440\u0438\u0430\u043d\u0442(?:\u044b|\u0430|\u043e\u0432)?)\s+([\d,\s\u0438\-\u2013\u2014]+)/giu,
+        /(?:\u043a\u043e\u0434(?:\u044b|\u0430|\u043e\u0432)?|\u0432\u0430\u0440\u0438\u0430\u043d\u0442(?:\u044b|\u0430|\u043e\u0432)?)\s+([\d,\s\u0438\-\u2013\u2014]+)\s+(?:\u043d\u0435\s+\u0440\u043e\u0442\u0438\u0440|\u0444\u0438\u043a\u0441\u0438\u0440|\u0437\u0430\u043a\u0440\u0435\u043f)/giu
+      ];
+      patterns.forEach((pattern) => {
+        let match;
+        while ((match = pattern.exec(text))) {
+          const after = text.slice(pattern.lastIndex, pattern.lastIndex + 40);
+          if (/\u0432\s+(?:\u044d\u0442\u043e\u0439\s+)?\u0433\u0440\u0443\u043f\u043f/iu.test(after)) continue;
+          codes.push(...parseNumberList(match[1]));
+        }
+      });
+      return uniqueNumberList(codes);
+    }
+
     function extractRotationOnlyCodes(q) {
       const text = normalizeWhitespace(questionContextTexts(q).join(" "));
       if (!text || !/(\u0440\u043e\u0442\u0430\u0446\u0438|\u0440\u043e\u0442\u0430\u0446|\u0440\u043e\u0442\u0438\u0440)/iu.test(text)) return [];
@@ -2995,7 +3068,10 @@
       if (!texts.length) return "";
       const joined = texts.join(" ");
       const groups = extractGroupedRotationGroups(texts);
-      const tailCodes = uniqueNumberList([...getTailOptionCodes(q), ...extractRotationExceptCodesSafe(q)]);
+      const tailCodes = uniqueNumberList([
+        ...getTailOptionCodes(q),
+        ...(state.expressMode ? extractRotationExceptCodesSafe(q) : extractRotationFixedCodes(q))
+      ]);
       if (groups.length) {
         const shuffleWithinGroup = !/внутри\s+блок[а-я]*\s+не\s+ротир/i.test(joined);
         return buildGroupedBeforeCode(groups, tailCodes, shuffleWithinGroup);
@@ -3981,7 +4057,8 @@
         const options = optionRows.map(row => ({
           code: row.code,
           text: row.text,
-          flags: inferOptionFlags(row.code, row.text)
+          condition: row.condition,
+          flags: inferOptionFlags(row.code, [row.text, row.condition].filter(Boolean).join(" "))
         }));
         const showRules = optionRows
           .map(row => row.condition ? parseSeparatedOptionShowRule(row.condition, row.code) : null)
@@ -6393,7 +6470,7 @@ final: ${escapeHtml(draft.final_code || "")}
       const lines = [];
       scaleItems.forEach((item) => {
         const code = String(item.code || "").trim();
-        const text = stripOptionFillLine(item.htmlText || escapeHtml(item.text || ""));
+        const text = stripOptionFillLine(stripOpenFieldInstructionArtifacts(item.htmlText || escapeHtml(item.text || "")));
         lines.push(`${code}. ${decodeScriptQuoteEntities(text)}`.trimEnd());
         const flags = new Set(item.flags || []);
         if (q.type === "Multi" && code === "99") flags.add("exclusive");
@@ -8678,7 +8755,7 @@ final: ${escapeHtml(draft.final_code || "")}
       htmlText = stripExpressTrailingMarker(htmlText, completePattern);
       text = stripExpressGotoMarker(text);
       htmlText = stripExpressGotoMarker(htmlText);
-      const markerPattern = /(?:\s*(?:[-–—,;:]|\(|\[)\s*)?(открыт(?:ый|ая|ое|ые)(?:\s+вопрос)?|эксклюзив(?:ный|ная|ное|ные)?)(?:\s*[\])])?\s*$/iu;
+      const markerPattern = /(?:\s*(?:[-–—,;:]|\(|\[)\s*)?(открыт(?:ый|ая|ое|ые)(?:\s+вопрос)?|exclusive|исключающ(?:ий|ая|ее|ие|их|его|ему|им)?(?:\s+вариант\p{L}*)?)(?:\s*[\])])?\s*$/iu;
 
       for (let guard = 0; guard < 3; guard += 1) {
         const match = text.match(markerPattern);
@@ -8688,7 +8765,7 @@ final: ${escapeHtml(draft.final_code || "")}
           flags.add("other");
           flags.add("fix");
         }
-        if (marker.startsWith("эксклюзив")) {
+        if (marker.startsWith("exclusive") || marker.startsWith("исключающ")) {
           flags.add("exclusive");
           flags.add("fix");
         }
@@ -8716,10 +8793,14 @@ final: ${escapeHtml(draft.final_code || "")}
       const flags = new Set(Array.isArray(option?.flags) ? option.flags : []);
       let text = normalizeWhitespace(option?.text || "");
       let htmlText = normalizeHtmlWhitespace(option?.htmlText || option?.html_text || escapeHtml(text));
-      const markerSource = normalizeWhitespace(stripExpressHtmlTags([htmlText, text].filter(Boolean).join(" ")));
-      if (/(?:\bexclusive\b|\u044d\u043a\u0441\u043a\u043b\u044e\u0437\u0438\u0432(?:\u043d\p{L}*)?)/iu.test(markerSource)) {
+      const conditionText = normalizeWhitespace(option?.condition || "");
+      const markerSource = normalizeWhitespace(stripExpressHtmlTags([htmlText, text, conditionText].filter(Boolean).join(" ")));
+      if (regularOptionHasExplicitExclusiveMarker(markerSource)) {
         flags.add("exclusive");
         flags.add("fix");
+      }
+      if (regularOptionHasOpenFieldMarker(markerSource)) {
+        flags.add("other");
       }
       text = stripRegularOptionServiceSuffix(text);
       htmlText = stripRegularOptionServiceSuffixFromHtml(htmlText);
@@ -8729,12 +8810,12 @@ final: ${escapeHtml(draft.final_code || "")}
 
     function isRegularOptionServiceMarkerText(text) {
       const clean = normalizeWhitespace(stripExpressHtmlTags(text || ""));
-      return /^(?:\(?\s*)?(?:exclusive|\u044d\u043a\u0441\u043b\u044e\u0437\u0438\u0432(?:\u043d\p{L}*)?)(?:\s*\)?)$/iu.test(clean);
+      return regularOptionHasExplicitExclusiveMarker(clean);
     }
 
     function stripRegularOptionServiceSuffix(value) {
       let clean = String(value || "");
-      const markerPattern = /(?:\s*(?:[-\u2013\u2014,;:]|\(|\[)\s*)?(?:exclusive|\u044d\u043a\u0441\u043b\u044e\u0437\u0438\u0432(?:\u043d\p{L}*)?)(?:\s*[\])])?\s*$/iu;
+      const markerPattern = /(?:\s*(?:[-\u2013\u2014,;:]|\(|\[)\s*)?(?:exclusive|\u0438\u0441\u043a\u043b\u044e\u0447\u0430\u044e\u0449(?:\u0438\u0439|\u0430\u044f|\u0435\u0435|\u0438\u0435|\u0438\u0445|\u0435\u0433\u043e|\u0435\u043c\u0443|\u0438\u043c)?(?:\s+\u0432\u0430\u0440\u0438\u0430\u043d\u0442\p{L}*)?)(?:\s*[\])])?\s*$/iu;
       for (let guard = 0; guard < 3; guard += 1) {
         const match = clean.match(markerPattern);
         if (!match) break;
@@ -8772,7 +8853,7 @@ final: ${escapeHtml(draft.final_code || "")}
 
     function stripExpressServiceHtmlMarkers(value) {
       let clean = String(value || "");
-      const serviceTextPattern = /(?:^|\s|[-\u2013\u2014вЂ“вЂ”,;:])(?:complete|\u043a\u043e\u043c\u043f\u043b\u0438\u0442|\u0437\u0430\u043a\u043e\u043d\u0447\w*|\u0437\u0430\u0432\u0435\u0440\u0448\w*|\u043e\u0442\u043a\u0440\u044b\u0442(?:\u044b\u0439|\u0430\u044f|\u043e\u0435|\u044b\u0435)?(?:\s+\u0432\u043e\u043f\u0440\u043e\u0441)?|\u044d\u043a\u0441\u043a\u043b\u044e\u0437\u0438\u0432(?:\u043d\u044b\u0439|\u043d\u0430\u044f|\u043d\u043e\u0435|\u043d\u044b\u0435)?|РєРѕРјРїР»РёС‚|Р·Р°РєРѕРЅС‡\w*|Р·Р°РІРµСЂС€\w*|РѕС‚РєСЂС‹С‚(?:С‹Р№|Р°СЏ|РѕРµ|С‹Рµ)?(?:\s+РІРѕРїСЂРѕСЃ)?|СЌРєСЃРєР»СЋР·РёРІ(?:РЅС‹Р№|РЅР°СЏ|РЅРѕРµ|РЅС‹Рµ)?)\s*$/iu;
+      const serviceTextPattern = /(?:^|\s|[-\u2013\u2014вЂ“вЂ”,;:])(?:complete|\u043a\u043e\u043c\u043f\u043b\u0438\u0442|\u0437\u0430\u043a\u043e\u043d\u0447\w*|\u0437\u0430\u0432\u0435\u0440\u0448\w*|\u043e\u0442\u043a\u0440\u044b\u0442(?:\u044b\u0439|\u0430\u044f|\u043e\u0435|\u044b\u0435)?(?:\s+\u0432\u043e\u043f\u0440\u043e\u0441)?|exclusive|\u0438\u0441\u043a\u043b\u044e\u0447\u0430\u044e\u0449(?:\u0438\u0439|\u0430\u044f|\u0435\u0435|\u0438\u0435|\u0438\u0445|\u0435\u0433\u043e|\u0435\u043c\u0443|\u0438\u043c)?(?:\s+\u0432\u0430\u0440\u0438\u0430\u043d\u0442\p{L}*)?|РєРѕРјРїР»РёС‚|Р·Р°РєРѕРЅС‡\w*|Р·Р°РІРµСЂС€\w*|РѕС‚РєСЂС‹С‚(?:С‹Р№|Р°СЏ|РѕРµ|С‹Рµ)?(?:\s+РІРѕРїСЂРѕСЃ)?)\s*$/iu;
       for (let guard = 0; guard < 3; guard += 1) {
         const spanMatch = clean.match(/(?:\s*(?:[-\u2013\u2014вЂ“вЂ”,;:]|\(|\[)\s*)?<span\b[^>]*>\s*([^<]+?)\s*<\/span>\s*$/iu);
         if (!spanMatch || !serviceTextPattern.test(spanMatch[1])) break;
@@ -8858,6 +8939,7 @@ final: ${escapeHtml(draft.final_code || "")}
           code: normalizeWhitespace(option?.code || ""),
           text: normalizeWhitespace(option?.text || ""),
           htmlText: normalizeHtmlWhitespace(option?.html_text || escapeHtml(option?.text || "")),
+          condition: normalizeWhitespace(option?.condition || ""),
           flags: Array.isArray(option?.flags) ? option.flags : []
         }))
         .filter(option => option.code || option.text);
@@ -8869,6 +8951,7 @@ final: ${escapeHtml(draft.final_code || "")}
               code,
               text: tailOption.text,
               htmlText: escapeHtml(tailOption.text),
+              condition: "",
               flags: Array.isArray(tailOption.flags) ? tailOption.flags : []
             });
             existingCodes.add(code);
@@ -8882,6 +8965,7 @@ final: ${escapeHtml(draft.final_code || "")}
               code,
               text: tailOption.text,
               htmlText: escapeHtml(tailOption.text),
+              condition: "",
               flags: Array.isArray(tailOption.flags) ? tailOption.flags : []
             });
             existingCodes.add(code);
@@ -8890,8 +8974,8 @@ final: ${escapeHtml(draft.final_code || "")}
       }
 
       const lines = [];
-      const rotationExceptCodes = new Set(extractRotationExceptCodesSafe(q));
-      const rotationOnlyCodes = new Set(extractRotationOnlyCodes(q));
+      const rotationFixedCodes = new Set(state.expressMode ? extractRotationExceptCodesSafe(q) : extractRotationFixedCodes(q));
+      const rotationOnlyCodes = rotationFixedCodes.size ? new Set() : new Set(extractRotationOnlyCodes(q));
       options.forEach((option) => {
         option = state.expressMode ? normalizeExpressOptionMarker(option) : normalizeRegularOptionServiceMarker(option);
         const code = normalizeWhitespace(option.code || "");
@@ -8908,30 +8992,32 @@ final: ${escapeHtml(draft.final_code || "")}
           text = stripScreenoutServiceSuffix(text);
         }
         text = stripOptionServiceTableTail(text);
+        text = stripOpenFieldInstructionArtifacts(text);
         text = stripOptionFillLine(text);
         const flags = new Set(option.flags);
+        const isMultiQuestion = scriptQuestionType(q) === "Multi";
         if (generatedSource) {
           flags.delete("fix");
           if (code === "98") flags.delete("other");
-          if (code === "99") flags.add("exclusive");
         }
         const exportsRandomize = shouldExportOptionsRandomize(q);
-        if (!flags.has("other") && isExpressOtherOptionText(text)) flags.add("other");
-        if (exportsRandomize && rotationOnlyCodes.size && !rotationOnlyCodes.has(String(code))) flags.add("fix");
-        if (exportsRandomize && rotationExceptCodes.has(String(code))) flags.add("fix");
+        const isGroupedRotationExport = q.script_rotation_mode === "groups";
+        const optionMarkerSource = [text, option.condition].filter(Boolean).join(" ");
+        if (!flags.has("other") && (state.expressMode ? isExpressOtherOptionText(optionMarkerSource) : isRegularOtherOptionText(optionMarkerSource, code))) flags.add("other");
+        if (isMultiQuestion && !flags.has("exclusive") && (regularOptionHasExplicitExclusiveMarker(optionMarkerSource) || regularOptionLooksNoneExclusive(optionMarkerSource, code))) flags.add("exclusive");
+        if (exportsRandomize && rotationFixedCodes.size && !rotationFixedCodes.has(String(code)) && !flags.has("other") && !flags.has("exclusive")) flags.delete("fix");
+        if (exportsRandomize && !isGroupedRotationExport && rotationOnlyCodes.size && !rotationOnlyCodes.has(String(code))) flags.add("fix");
+        if (exportsRandomize && !isGroupedRotationExport && rotationFixedCodes.has(String(code))) flags.add("fix");
+        if (exportsRandomize && isGroupedRotationExport && rotationFixedCodes.has(String(code))) flags.delete("fix");
         if (!exportsRandomize && (flags.has("other") || flags.has("exclusive"))) flags.delete("fix");
         if (state.expressMode && q.type === "Single" && flags.has("exclusive")) {
           flags.delete("exclusive");
           if (exportsRandomize) flags.add("fix");
         }
-        if (q.type === "Multi" && code === "99") {
-          flags.add("exclusive");
-          if (exportsRandomize) flags.add("fix");
-        }
         if (q.type === "Single" && code === "99" && exportsRandomize) {
           flags.add("fix");
         }
-        if (scriptQuestionType(q) !== "Multi") {
+        if (!isMultiQuestion) {
           flags.delete("exclusive");
         }
         const optionLineText = decodeScriptQuoteEntities(text);
@@ -8944,7 +9030,7 @@ final: ${escapeHtml(draft.final_code || "")}
       if (!lines.length && (q.type === "Grid" || q.type === "Matrix") && Array.isArray(q.columns) && q.columns.length) {
         q.columns.forEach((column, index) => {
           const code = normalizeWhitespace(column?.code || String(index + 1));
-          const text = stripOptionFillLine(normalizeHtmlWhitespace(column?.html_text || escapeHtml(column?.text || "")));
+          const text = stripOptionFillLine(stripOpenFieldInstructionArtifacts(normalizeHtmlWhitespace(column?.html_text || escapeHtml(column?.text || ""))));
           lines.push(`${code}. ${decodeScriptQuoteEntities(text)}`.trimEnd());
         });
       }
@@ -8974,7 +9060,7 @@ final: ${escapeHtml(draft.final_code || "")}
         const columnLines = q.columns
           .flatMap((column, index) => {
             const code = normalizeWhitespace(column?.code || String(index + 1)).replace(/^C/iu, "");
-            const text = stripOptionFillLine(normalizeHtmlWhitespace(column?.html_text || escapeHtml(column?.text || "")));
+            const text = stripOptionFillLine(stripOpenFieldInstructionArtifacts(normalizeHtmlWhitespace(column?.html_text || escapeHtml(column?.text || ""))));
             const split = splitInlineNumberedItems(`${code}. ${text}`);
             return split.length ? split.map(item => `${item.code}. ${decodeScriptQuoteEntities(item.text)}`) : [`${code}. ${decodeScriptQuoteEntities(text)}`.trimEnd()];
           })
@@ -9015,7 +9101,7 @@ final: ${escapeHtml(draft.final_code || "")}
     function stripScreenoutServiceSuffix(value) {
       let clean = normalizeHtmlWhitespace(value);
       if (!clean) return clean;
-      const markerPattern = /(?:\s*(?:[-–—,;:]|\(|\[)\s*)?(?:заверш\p{L}*|законч\p{L}*|скрин|screenout|screen\s*out|открыт(?:ый|ая|ое|ые)(?:\s+вопрос)?|эксклюзив(?:ный|ная|ное|ные)?|exclusive|доп\s+разрез(?:ы)?|проверить\s+квот[уы]?)(?:\s*[\])])?\s*$/iu;
+      const markerPattern = /(?:\s*(?:[-–—,;:]|\(|\[)\s*)?(?:заверш\p{L}*|законч\p{L}*|скрин|screenout|screen\s*out|открыт(?:ый|ая|ое|ые)(?:\s+вопрос)?|exclusive|исключающ(?:ий|ая|ее|ие|их|его|ему|им)?(?:\s+вариант\p{L}*)?|доп\s+разрез(?:ы)?|проверить\s+квот[уы]?)(?:\s*[\])])?\s*$/iu;
       for (let guard = 0; guard < 3; guard += 1) {
         const match = clean.match(markerPattern);
         if (!match) break;
@@ -9027,6 +9113,7 @@ final: ${escapeHtml(draft.final_code || "")}
     function stripOptionFillLine(value) {
       let clean = normalizeHtmlWhitespace(value);
       if (!clean) return clean;
+      const trailingFillAfterColon = clean.match(/([:\uff1a])(?:\s|&nbsp;|&#160;)*(?:[_\uff3f]{3,}|<u>\s*[_\uff3f]{3,}\s*<\/u>|<span\b[^>]*>\s*[_\uff3f]{3,}\s*<\/span>)(?:\s|&nbsp;|&#160;)*$/iu);
       for (let guard = 0; guard < 3; guard += 1) {
         const next = clean
           .replace(/(?:\s|&nbsp;|&#160;)*[:：]?(?:\s|&nbsp;|&#160;)*[_＿]{3,}(?:\s|&nbsp;|&#160;)*$/u, "")
@@ -9034,6 +9121,25 @@ final: ${escapeHtml(draft.final_code || "")}
           .trim();
         if (next === clean) break;
         clean = next;
+      }
+      if (trailingFillAfterColon && !/[:\uff1a]\s*$/.test(clean)) clean = `${clean}${trailingFillAfterColon[1]}`;
+      return clean;
+    }
+
+    function stripOpenFieldInstructionArtifacts(value) {
+      let clean = normalizeHtmlWhitespace(value);
+      if (!clean) return clean;
+      const openMarkerText = /^(?:\u043e\u0442\u043a\u0440\u044b\u0442(?:\u044b\u0439|\u0430\u044f|\u043e\u0435|\u044b\u0435)?(?:\s+(?:\u0432\u043e\u043f\u0440\u043e\u0441|\u043e\u0442\u0432\u0435\u0442))?|open(?:\s+(?:answer|text|field))?)$/iu;
+      for (let guard = 0; guard < 4; guard += 1) {
+        const before = clean;
+        clean = clean
+          .replace(/(?:\s|&nbsp;|&#160;)*(?:<span\b[^>]*>\s*(?:<i>\s*)?([\s\S]*?)(?:\s*<\/i>)?\s*<\/span>|<font\b[^>]*>\s*([\s\S]*?)\s*<\/font>)(?:\s|&nbsp;|&#160;)*$/iu, (match, spanText, fontText) => {
+            const plain = normalizeWhitespace(stripExpressHtmlTags(spanText || fontText || ""));
+            return openMarkerText.test(plain) ? "" : match;
+          })
+          .replace(/(?:\s|&nbsp;|&#160;)*(?:[-\u2013\u2014,;:]|\(|\[)?\s*(?:\u043e\u0442\u043a\u0440\u044b\u0442(?:\u044b\u0439|\u0430\u044f|\u043e\u0435|\u044b\u0435)?(?:\s+(?:\u0432\u043e\u043f\u0440\u043e\u0441|\u043e\u0442\u0432\u0435\u0442))?|open(?:\s+(?:answer|text|field))?)\s*[\])]?$/iu, "")
+          .trim();
+        if (clean === before) break;
       }
       return clean;
     }
@@ -9050,7 +9156,6 @@ final: ${escapeHtml(draft.final_code || "")}
         "доп разрезы",
         "complete",
         "комплит",
-        "эксклюзив",
         "закрытый",
         "закрытая",
         "закрытое",
@@ -9112,7 +9217,7 @@ final: ${escapeHtml(draft.final_code || "")}
             text = `<img src="/uploads/surveys/${logoSurveyId()}/logo_${code}.jpg">${text}`;
           }
           text = stripScreenoutServiceSuffix(text);
-          text = stripOptionFillLine(text);
+          text = stripOptionFillLine(stripOpenFieldInstructionArtifacts(text));
           return `${code}. ${decodeScriptQuoteEntities(text)}`.trimEnd();
         })
         .filter(Boolean);
