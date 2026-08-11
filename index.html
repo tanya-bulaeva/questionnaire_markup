@@ -871,8 +871,16 @@
     }
 
     .geo-control-grid .geo-autocode-flags {
-      flex-wrap: nowrap;
+      flex-direction: column;
+      align-items: flex-start;
       gap: 6px;
+    }
+
+    .geo-control-grid .geo-autocode-row {
+      display: flex;
+      gap: 6px;
+      flex-wrap: wrap;
+      align-items: center;
     }
 
     .geo-control-grid .geo-autocode-flags .file-button {
@@ -1177,7 +1185,7 @@
           <li>Роль `condition` используйте для условий показа. Если условие не распознано, оно выйдет как `condition: [ПРОВЕРИТЬ: ...]`.</li>
           <li>Если у варианта ответа нет кода, приложение не подставляет код автоматически и покажет предупреждение справа.</li>
           <li>Для open-вопросов используйте поле `Open list`: `обычный free`, `10 полей`, `10 полей + ЗО`, `10 выпадающих полей`, `10 выпадающих полей + ЗО`.</li>
-          <li>Если вопрос определен как GEO-вопрос, справа появятся настройки GEO: порог городов, Крым и автокодируемые блоки `Qstrata`/`Qdistrict`/`Qregion`. Если шаблон указан в анкете явно, приложение пытается выбрать его автоматически.</li>
+          <li>Если вопрос определен как GEO-вопрос, справа появятся настройки GEO: порог городов, Крым и автокодируемые блоки `Qstrata`, `Qdistrict`, `Qregion`, `QstrataWI`, `QdistrictDop`. Если шаблон указан в анкете явно, приложение пытается выбрать его автоматически. Если в анкете дан собственный список городов без GEO-шаблона, выберите порог `без шаблона`.</li>
           <li>Для циклических блоков сначала нажмите `Лупсы`. После поиска можно использовать `Характеристики лупс`, если нужно собрать лупс по характеристикам выбранного вопроса.</li>
           <li>Перед скачиванием скрипта проверьте предупреждения справа и итоговый предпросмотр.</li>
           <li>Когда проверка закончена, нажмите `Скачать TXT-скрипт`.</li>
@@ -2530,13 +2538,13 @@
       const showRules = [];
       const blocks = qBlocks || [];
       for (let i = 0; i < blocks.length - 1; i += 1) {
-        const codeText = normalizeWhitespace(blocks[i]?.text || "");
-        if (!/^\d{1,4}$/.test(codeText)) continue;
+        const codeText = separatedOptionCodeText(blocks[i]?.text || "");
+        if (!codeText) continue;
         if (i > 0 && parseQuestionStart(blocks[i - 1]?.text || "")) continue;
         const textBlock = nextSeparatedOptionTextBlock(blocks, i + 1);
         if (!textBlock) continue;
         const optionText = normalizeWhitespace(textBlock.text || "");
-        if (!optionText || isSeparatedOptionServiceText(optionText) || /^\d{1,4}$/.test(optionText)) continue;
+        if (!optionText || isSeparatedOptionServiceText(optionText) || separatedOptionCodeText(optionText)) continue;
         const conditionBlock = nextSeparatedOptionConditionBlock(blocks, textBlock.index + 1);
         const optionCondition = conditionBlock ? normalizeWhitespace(conditionBlock.text || "") : "";
         const option = {
@@ -2575,6 +2583,11 @@
       };
     }
 
+    function separatedOptionCodeText(text) {
+      const compact = normalizeWhitespace(text || "").replace(/\s+/g, "");
+      return /^\d{1,4}$/.test(compact) ? compact : "";
+    }
+
     function nextSeparatedOptionTextBlock(blocks, startIndex) {
       for (let index = startIndex; index < blocks.length; index += 1) {
         const text = normalizeWhitespace(blocks[index]?.text || "");
@@ -2591,7 +2604,7 @@
         const text = normalizeWhitespace(blocks[index]?.text || "");
         if (!text) continue;
         if (isSeparatedOptionSkippableText(text)) continue;
-        if (/^\d{1,4}$/.test(text) || parseQuestionStart(text)) return null;
+        if (separatedOptionCodeText(text) || parseQuestionStart(text)) return null;
         if (isSeparatedOptionShowInstruction(text)) return { block: blocks[index], text, index };
         return null;
       }
@@ -3052,7 +3065,7 @@
     }
 
     function shouldExportOptionsRandomize(q) {
-      if (isGeoCityQuestion(q)) return false;
+      if (isGeoCityQuestion(q) && !isCustomGeoCityQuestion(q)) return false;
       if (isGenderQuestion(q)) return false;
       if (hasAgeIntervalOptions(q)) return false;
       if (q.script_rotation_mode === "groups" && (q.script_rotation_groups || []).length) return true;
@@ -3062,7 +3075,7 @@
     }
 
     function inferBeforeCode(q) {
-      if (isGeoCityQuestion(q)) return "";
+      if (isGeoCityQuestion(q) && !isCustomGeoCityQuestion(q)) return "";
       if (hasAgeIntervalOptions(q)) return "";
       const texts = questionContextTexts(q);
       if (!texts.length) return "";
@@ -4794,18 +4807,24 @@ final: ${escapeHtml(draft.final_code || "")}
           ${canShowGeoControls ? `<div class="geo-control-grid">
             <label><span>Geo порог</span>
               <select id="geoThresholdInput">
-                ${["mln+","700+","500+","400+","250+","100+","50+","all"].map(value => `<option value="${value}" ${String(q.geo_city_threshold || "100+") === value ? "selected" : ""}>${value === "all" ? "0+ / все" : value}</option>`).join("")}
+                ${["mln+","700+","500+","400+","250+","100+","50+","all","custom"].map(value => `<option value="${value}" ${String(q.geo_city_threshold || "100+") === value ? "selected" : ""}>${geoThresholdLabel(value)}</option>`).join("")}
               </select>
             </label>
             <div class="geo-flags">
               <label class="file-button"><input id="geoCrimeaInput" type="checkbox" ${q.geo_city_include_crimea ? "checked" : ""}> С Крымом</label>
             </div>
             <div class="geo-flags geo-autocode-flags full-row">
-              <label class="file-button"><input class="geoAutocodeInput" type="checkbox" value="strata" ${geoCheckedTargets.has("strata") ? "checked" : ""} ${geoAutocodeDisabled}> Qstrata</label>
-              <label class="file-button"><input class="geoAutocodeInput" type="checkbox" value="district" ${geoCheckedTargets.has("district") ? "checked" : ""} ${geoAutocodeDisabled}> Qdistrict</label>
-              <label class="file-button"><input class="geoAutocodeInput" type="checkbox" value="region" ${geoCheckedTargets.has("region") ? "checked" : ""} ${geoAutocodeDisabled}> Qregion</label>
+              <div class="geo-autocode-row">
+                <label class="file-button"><input class="geoAutocodeInput" type="checkbox" value="strata" ${geoCheckedTargets.has("strata") ? "checked" : ""} ${geoAutocodeDisabled}> Qstrata</label>
+                <label class="file-button"><input class="geoAutocodeInput" type="checkbox" value="district" ${geoCheckedTargets.has("district") ? "checked" : ""} ${geoAutocodeDisabled}> Qdistrict</label>
+                <label class="file-button"><input class="geoAutocodeInput" type="checkbox" value="region" ${geoCheckedTargets.has("region") ? "checked" : ""} ${geoAutocodeDisabled}> Qregion</label>
+              </div>
+              <div class="geo-autocode-row">
+                <label class="file-button"><input class="geoAutocodeInput" type="checkbox" value="strata_wi" ${geoCheckedTargets.has("strata_wi") ? "checked" : ""} ${geoAutocodeDisabled}> QstrataWI</label>
+                <label class="file-button"><input class="geoAutocodeInput" type="checkbox" value="district_dop" ${geoCheckedTargets.has("district_dop") ? "checked" : ""} ${geoAutocodeDisabled}> QdistrictDop</label>
+              </div>
             </div>
-            <div class="field-hint geo-status">${state.geoRows.length ? `GEO справочник: ${geoCityCount} городов; шаблон ${String(q.geo_city_threshold || "100+") === "all" ? "0+" : escapeHtml(String(q.geo_city_threshold || "100+"))} ${geoCrimeaText}${geoTemplate ? "" : "; шаблон не найден"}${explicitGeoTargets.size ? "; автокод из анкеты" : ""}` : "GEO справочник не найден."}</div>
+            <div class="field-hint geo-status">${state.geoRows.length || String(q.geo_city_threshold || "") === "custom" ? `GEO справочник: ${geoCityCount} городов; шаблон ${escapeHtml(geoThresholdLabel(q.geo_city_threshold || "100+"))}${String(q.geo_city_threshold || "") === "custom" ? "" : ` ${geoCrimeaText}`}${geoTemplate || String(q.geo_city_threshold || "") === "custom" ? "" : "; шаблон не найден"}${explicitGeoTargets.size ? "; автокод из анкеты" : ""}` : "GEO справочник не найден."}</div>
           </div>` : ""}
         </div>
         ${changeProjectBadgesHtml(q)}
@@ -6320,6 +6339,7 @@ final: ${escapeHtml(draft.final_code || "")}
         const blocks = [buildScriptQuestionBlock(q)];
         if (targets.has("region")) blocks.push(buildGeoRegionQuestionBlock(q));
         if (targets.has("district")) blocks.push(buildGeoDistrictQuestionBlock(q));
+        if (targets.has("district_dop")) blocks.push(buildGeoDistrictDopQuestionBlock(q));
         if (targets.has("strata")) blocks.push(buildGeoStrataQuestionBlock(q));
         if (targets.has("strata_wi")) blocks.push(buildGeoStrataWiQuestionBlock(q));
         return blocks.filter(Boolean);
@@ -6861,7 +6881,7 @@ final: ${escapeHtml(draft.final_code || "")}
         lines.push("template: buttons");
       }
 
-      if (isGeoCityQuestion(q)) {
+      if (isGeoCityQuestion(q) && !isCustomGeoCityQuestion(q)) {
         lines.push("template: list");
         lines.push("search: yes");
         lines.push("html1: <code>");
@@ -7051,6 +7071,9 @@ final: ${escapeHtml(draft.final_code || "")}
     ];
 
     function geoCityOptions(q) {
+      if (String(q?.geo_city_threshold || "") === "custom") {
+        return customGeoCityOptions(q);
+      }
       const template = geoTemplateForQuestion(q);
       if (template?.cityOptions?.length) {
         return template.cityOptions
@@ -7064,6 +7087,47 @@ final: ${escapeHtml(draft.final_code || "")}
         .filter(row => threshold === "all" || Number(row.population || 0) >= minPopulation || isGeoAlwaysIncludedRow(row))
         .filter(row => q?.geo_city_include_crimea || !isCrimeaGeoRow(row))
         .filter(row => Number(row.code || 0) !== 9998 && Number(row.code || 0) !== 9999);
+    }
+
+    function customGeoCityOptions(q) {
+      return customGeoOptionRows(q)
+        .filter(option => Number.isFinite(option.code) && option.city && !isGeoOtherText(option.city));
+    }
+
+    function customGeoOptionRows(q) {
+      const rows = [];
+      const seenCodes = new Set();
+      (Array.isArray(q?.options) ? q.options : []).forEach(option => {
+        expandCustomGeoOption(option).forEach(row => {
+          const codeKey = String(row.code);
+          if (!Number.isFinite(row.code) || !row.city || seenCodes.has(codeKey)) return;
+          seenCodes.add(codeKey);
+          rows.push(row);
+        });
+      });
+      return rows;
+    }
+
+    function expandCustomGeoOption(option) {
+      const code = Number(normalizeWhitespace(option?.code || ""));
+      const text = normalizeWhitespace(stripHtmlTags(option?.text || option?.html_text || ""));
+      if (!text) return [];
+      const slashParts = text.split(/\s*\/\s*/u).map(part => normalizeWhitespace(part)).filter(Boolean);
+      const rows = [];
+      const addRow = (rowCode, city) => {
+        const numericCode = Number(normalizeWhitespace(rowCode || ""));
+        const cleanCity = normalizeWhitespace(city || "").replace(/\s*\|\s*$/u, "");
+        if (Number.isFinite(numericCode) && cleanCity) rows.push({ code: numericCode, city: cleanCity });
+      };
+      if (slashParts.length >= 2 && slashParts.some(part => /^\d{1,4}\s*\|/u.test(part))) {
+        if (Number.isFinite(code) && !/^\d{1,4}\s*\|/u.test(slashParts[0])) addRow(code, slashParts[0]);
+        slashParts.forEach(part => {
+          const match = part.match(/^(\d{1,4})\s*\|\s*(.+)$/u);
+          if (match) addRow(match[1], match[2]);
+        });
+        if (rows.length >= 2) return rows;
+      }
+      return Number.isFinite(code) ? [{ code, city: text }] : [];
     }
 
     function geoOtherOption(q) {
@@ -7086,7 +7150,7 @@ final: ${escapeHtml(draft.final_code || "")}
           code: normalizeWhitespace(option?.code || ""),
           text: normalizeGeoOtherText(option?.text || stripHtmlTags(option?.html_text || ""))
         }))
-        .find(option => /^(9998|9999)$/.test(option.code) && isGeoOtherText(option.text));
+        .find(option => option.code && isGeoOtherText(option.text));
       if (existing) return existing;
       const badgeText = String(context || "").match(/Другой\s+(?:город|населенн?ый\s+пункт)/iu)?.[0] || "";
       if (badgeText) {
@@ -7099,19 +7163,26 @@ final: ${escapeHtml(draft.final_code || "")}
     }
 
     function isGeoOtherText(text) {
-      return /^Другой\s+(?:город|населенн?ый\s+пункт)$/iu.test(normalizeWhitespace(text || ""));
+      const clean = normalizeWhitespace(stripHtmlTags(text || ""))
+        .replace(/\s*\([^)]*\)\s*$/u, "")
+        .replace(/[.。]+$/u, "");
+      return /^(?:Другой\s+(?:город|населенн?ый\s+пункт|регион)|Другое)$/iu.test(clean);
     }
 
     function normalizeGeoOtherText(text) {
-      const clean = normalizeWhitespace(stripHtmlTags(text || "")).replace(/[.。]+$/u, "");
+      const clean = normalizeWhitespace(stripHtmlTags(text || ""))
+        .replace(/\s*\([^)]*\)\s*$/u, "")
+        .replace(/[.。]+$/u, "");
       if (/^другой\s+город$/iu.test(clean)) return "Другой город";
       if (/^другой\s+населенн?ый\s+пункт$/iu.test(clean)) return "Другой населенный пункт";
+      if (/^другой\s+регион$/iu.test(clean)) return "Другой регион";
+      if (/^другое$/iu.test(clean)) return "Другое";
       return clean || "Другой населенный пункт";
     }
 
     function geoTemplateForQuestion(q) {
       const threshold = String(q?.geo_city_threshold || "");
-      if (!threshold) return null;
+      if (!threshold || threshold === "custom") return null;
       const key = `${threshold === "all" ? "0+" : threshold}|${q?.geo_city_include_crimea ? "crimea" : "noCrimea"}`;
       return window.GEO_TEMPLATES?.[key] || null;
     }
@@ -7129,13 +7200,25 @@ final: ${escapeHtml(draft.final_code || "")}
       if (requestedCode && templateCode !== requestedCode) {
         block = block.replace(new RegExp(`^${escapeRegExp(templateCode)}(?=\\.)`), requestedCode);
       }
-      return block.replace(/\$Qcity\b/g, `$${scriptQuestionCode(q)}`);
+      const actualCityCode = scriptQuestionCode(q);
+      return block
+        .replace(/\$КОДВОПРОСАГЕО(?![\p{L}\p{N}_])/gu, `$${actualCityCode}`)
+        .replace(/КОДВОПРОСАГЕО(?=\.)/g, requestedCode || templateCode || actualCityCode)
+        .replace(/\$Qcity\b/g, `$${actualCityCode}`);
     }
 
     function geoTemplateCommentLine(q) {
       const template = geoTemplateForQuestion(q);
+      if (String(q?.geo_city_threshold || "") === "custom") return "//без шаблона";
       if (!template) return "";
       return `//шаблон ${template.threshold} ${template.includeCrimea ? "с Крымом" : "без Крыма"}`;
+    }
+
+    function geoThresholdLabel(threshold) {
+      const value = String(threshold || "");
+      if (value === "all") return "0+ / все";
+      if (value === "custom") return "без шаблона";
+      return value || "100+";
     }
 
     function geoThresholdPopulation(threshold) {
@@ -7213,13 +7296,14 @@ final: ${escapeHtml(draft.final_code || "")}
     };
 
     function geoAutocodeTargets(q) {
+      const allowed = ["region", "district", "district_dop", "strata", "strata_wi"];
       if (q?.geo_autocode_targets_manual) {
         return new Set((Array.isArray(q?.geo_autocode_targets) ? q.geo_autocode_targets : [])
-          .filter(target => ["region", "district", "strata", "strata_wi"].includes(target)));
+          .filter(target => allowed.includes(target)));
       }
       const explicitTargets = explicitGeoAutocodeTargets(q);
       const storedTargets = new Set((Array.isArray(q?.geo_autocode_targets) ? q.geo_autocode_targets : [])
-        .filter(target => ["region", "district", "strata", "strata_wi"].includes(target)));
+        .filter(target => allowed.includes(target)));
       return new Set([...explicitTargets, ...storedTargets]);
     }
 
@@ -7235,10 +7319,12 @@ final: ${escapeHtml(draft.final_code || "")}
         ...(q?.source_blocks || []).map(ref => refText(ref))
       ].join(" "));
       const targets = new Set();
-      if (/\bQregion(?![A-Za-z0-9_])/i.test(text)) targets.add("region");
-      if (/\bQdistrict(?![A-Za-z0-9_])/i.test(text)) targets.add("district");
-      if (/\bQstrataWI(?![A-Za-z0-9_])/i.test(text)) targets.add("strata_wi");
-      if (/\bQstrata(?![A-Za-z0-9_])/i.test(text)) targets.add("strata");
+      if (/\bQregion(?![A-Za-z0-9_])|закодир\w*\s+регион|субъект\s+рф/iu.test(text)) targets.add("region");
+      if (/\bQdistrictDop(?![A-Za-z0-9_])|фо[\s\S]{0,80}(?:мск|москв)[\s\S]{0,80}спб|(?:мск|москв)[\s\S]{0,80}спб[\s\S]{0,80}фо/iu.test(text)) targets.add("district_dop");
+      if (/\bQdistrict(?![A-Za-z0-9_])|закодир\w*\s+(?:фо|федеральн\w+\s+округ)|федеральн\w+\s+округ|(?:цфо|сзфо|юфо|скфо|пфо|уфо|сфо|дфо|двфо)/iu.test(text)) targets.add("district");
+      if (/\bQstrataWI(?![A-Za-z0-9_])|webindex|web\s*index|кодирование\s+по\s+webindex/iu.test(text)) targets.add("strata_wi");
+      if (/\bQstrata(?![A-Za-z0-9_])|закодир\w*\s+страт|страты?|размер\s+города|по\s+интервалам/iu.test(text)) targets.add("strata");
+      if (targets.has("district_dop") && !/\bQdistrict(?![A-Za-z0-9_])/i.test(text)) targets.delete("district");
       return targets;
     }
 
@@ -7252,6 +7338,7 @@ final: ${escapeHtml(draft.final_code || "")}
       const patternByTarget = {
         region: /\bQregion(?![A-Za-z0-9_])/gi,
         district: /\bQdistrict(?![A-Za-z0-9_])/gi,
+        district_dop: /\bQdistrictDop(?![A-Za-z0-9_])/gi,
         strata: /\bQstrata(?![A-Za-z0-9_])/gi,
         strata_wi: /\bQstrataWI(?![A-Za-z0-9_])/gi
       };
@@ -7266,6 +7353,7 @@ final: ${escapeHtml(draft.final_code || "")}
       const options = geoCityOptions(q);
       if (!options.length) return "";
       const groups = groupGeoRows(options, row => geoRegionCode(row), row => row.region);
+      if (!groups.length) return "";
       return [
         `${code}. В каком регионе вы проживаете в настоящее время?`,
         "type: Single",
@@ -7292,6 +7380,7 @@ final: ${escapeHtml(draft.final_code || "")}
       if (!options.length) return "";
       const primaryGroups = groupGeoRows(options, row => geoDistrictCode(row), row => row.district);
       const groups = primaryGroups.length ? primaryGroups : groupGeoRows(options, row => geoDistrictDopCode(row), row => row.district_dop);
+      if (!groups.length) return "";
       return [
         `${code}. Федеральный округ`,
         "type: Single",
@@ -7309,13 +7398,15 @@ final: ${escapeHtml(draft.final_code || "")}
     }
 
     function buildGeoDistrictDopQuestionBlock(q) {
-      const templateBlock = geoTemplateBlock(q, "QdistrictDop");
+      const code = explicitGeoAutocodeLabel(q, "district_dop", "QdistrictDop");
+      const templateBlock = geoTemplateBlock(q, code);
       if (templateBlock) return templateBlock;
       const options = geoCityOptions(q);
       if (!options.length) return "";
       const groups = groupGeoRows(options, row => geoDistrictDopCode(row), row => row.district_dop);
+      if (!groups.length) return "";
       return [
-        "QdistrictDop. ФО (МСК и СПБ отдельно)",
+        `${code}. ФО (МСК и СПБ отдельно)`,
         "type: Single",
         "before: <code>",
         "$city=[",
@@ -7337,6 +7428,7 @@ final: ${escapeHtml(draft.final_code || "")}
       const options = geoCityOptions(q);
       if (!options.length) return "";
       const groups = groupGeoRows(options, row => geoStrataCode(row), row => geoStrataLabel(row));
+      if (!groups.length) return "";
       return [
         `${code}. Размер города`,
         "type: Single",
@@ -7360,6 +7452,7 @@ final: ${escapeHtml(draft.final_code || "")}
       const options = geoCityOptions(q);
       if (!options.length) return "";
       const groups = groupGeoRows(options, row => geoStrataWiCode(row), row => row.strata_wi);
+      if (!groups.length) return "";
       return [
         `${code}. Кодирование по WebIndex`,
         "type: Single",
@@ -7848,7 +7941,7 @@ final: ${escapeHtml(draft.final_code || "")}
     }
 
     function resolveScriptAfterCode(q) {
-      if (isGeoCityQuestion(q)) return "";
+      if (isGeoCityQuestion(q) && !isCustomGeoCityQuestion(q)) return "";
       const manualCode = String(q.script_after_code || "").trim();
       if (manualCode) return manualCode;
       const expressCompleteCode = state.expressMode ? buildExpressCompleteAfterCode(q) : "";
@@ -8638,7 +8731,7 @@ final: ${escapeHtml(draft.final_code || "")}
       html = normalizeHtmlWhitespace(html);
       html = stripQuestionCodePrefixFromTitleHtml(html, q);
       html = normalizeTextblueSpacing(html);
-      if (isGeoCityQuestion(q) && !/es__question-badge/.test(html)) {
+      if (isGeoCityQuestion(q) && !isCustomGeoCityQuestion(q) && !/es__question-badge/.test(html)) {
         const otherOption = geoOtherOption(q);
         html += `<div class="es__question-badge">Начните вводить название города и выберите нужный из списка. Если Вашего города не найдено - отметьте "${escapeHtml(otherOption.text)}"</div>`;
       }
@@ -8919,6 +9012,7 @@ final: ${escapeHtml(draft.final_code || "")}
 
     function scriptOptionLines(q) {
       if (isGeoCityQuestion(q)) {
+        if (isCustomGeoCityQuestion(q)) return customGeoScriptOptionLines(q);
         const lines = geoCityOptions(q).map(row => `${row.code}. ${decodeScriptQuoteEntities(escapeHtml(row.city))}`);
         const otherOption = geoOtherOption(q);
         lines.push(`${otherOption.code}. ${decodeScriptQuoteEntities(escapeHtml(otherOption.text))}`);
@@ -9038,6 +9132,38 @@ final: ${escapeHtml(draft.final_code || "")}
       return lines;
     }
 
+    function customGeoScriptOptionLines(q) {
+      const rows = customGeoOptionRows(q);
+      const lines = rows
+        .map(row => ({ ...row, city: cleanCustomGeoOptionText(row.city) }))
+        .filter(row => !isGeoOtherText(row.city))
+        .map(row => `${row.code}. ${decodeScriptQuoteEntities(escapeHtml(row.city))}`);
+      const existingOther = rows
+        .map(row => ({ ...row, city: cleanCustomGeoOptionText(row.city) }))
+        .find(row => isGeoOtherText(row.city));
+      if (existingOther) {
+        lines.push(`${existingOther.code}. ${decodeScriptQuoteEntities(escapeHtml(normalizeGeoOtherText(existingOther.city)))}`);
+      } else if (hasExplicitCustomGeoOther(q)) {
+        lines.push("9999. Другое");
+      }
+      return lines;
+    }
+
+    function cleanCustomGeoOptionText(text) {
+      return normalizeGeoOtherText(stripScreenoutServiceSuffix(text || ""));
+    }
+
+    function hasExplicitCustomGeoOther(q) {
+      const text = normalizeWhitespace([
+        q?.title || "",
+        ...(q?.instructions || []),
+        ...(q?.source_blocks || []).map(ref => refText(ref)),
+        ...(Array.isArray(q?.options) ? q.options : []).map(option => `${option?.code || ""} ${option?.text || ""}`)
+      ].join(" "));
+      return /(?:^|\s)\+\s*Другое\b/iu.test(text)
+        || /Другой\s+(?:город|населенн?ый\s+пункт|регион)/iu.test(text);
+    }
+
     function splitInlineNumberedItems(value) {
       const clean = normalizeWhitespace(stripHtmlTags(value || ""));
       if (!clean) return [];
@@ -9101,7 +9227,7 @@ final: ${escapeHtml(draft.final_code || "")}
     function stripScreenoutServiceSuffix(value) {
       let clean = normalizeHtmlWhitespace(value);
       if (!clean) return clean;
-      const markerPattern = /(?:\s*(?:[-–—,;:]|\(|\[)\s*)?(?:заверш\p{L}*|законч\p{L}*|скрин|screenout|screen\s*out|открыт(?:ый|ая|ое|ые)(?:\s+вопрос)?|exclusive|исключающ(?:ий|ая|ее|ие|их|его|ему|им)?(?:\s+вариант\p{L}*)?|доп\s+разрез(?:ы)?|проверить\s+квот[уы]?)(?:\s*[\])])?\s*$/iu;
+      const markerPattern = /(?:\s*(?:[-–—,;:]|\(|\[)\s*)?(?:заверш\p{L}*|законч\p{L}*|скрин\p{L}*|screenout|screen\s*out|открыт(?:ый|ая|ое|ые)(?:\s+вопрос)?|exclusive|исключающ(?:ий|ая|ее|ие|их|его|ему|им)?(?:\s+вариант\p{L}*)?|доп\s+разрез(?:ы)?|проверить\s+квот[уы]?)(?:\s*[\])])?\s*$/iu;
       for (let guard = 0; guard < 3; guard += 1) {
         const match = clean.match(markerPattern);
         if (!match) break;
@@ -10342,6 +10468,9 @@ if (count($text) > 0) {
       if (template && !wasEnabled) {
         q.geo_city_threshold = template.threshold;
         q.geo_city_include_crimea = template.includeCrimea;
+      } else if (!wasEnabled && hasCustomGeoCityOptions(q)) {
+        q.geo_city_threshold = "custom";
+        q.geo_city_include_crimea = false;
       } else {
         q.geo_city_threshold = q.geo_city_threshold || template?.threshold || "100+";
         q.geo_city_include_crimea = q.geo_city_include_crimea ?? template?.includeCrimea ?? false;
@@ -10357,6 +10486,10 @@ if (count($text) > 0) {
       return !!q?.geo_city_enabled && isGeoCityCandidate(q);
     }
 
+    function isCustomGeoCityQuestion(q) {
+      return isGeoCityQuestion(q) && String(q?.geo_city_threshold || "") === "custom";
+    }
+
     function isGeoCityCandidate(q) {
       const text = normalizeWhitespace([
         q?.code || "",
@@ -10365,9 +10498,21 @@ if (count($text) > 0) {
         ...(q?.instructions || []),
         ...(q?.source_blocks || []).map(ref => refText(ref))
       ].join(" "));
+      const codeText = normalizeWhitespace([q?.code || "", q?.normalized_code || ""].join(" "));
+      const hasGeoInstruction = /шаблон\s+гео|список\s+(?:городов|населенн?ых\s+пунктов)|выпадающ\w+\s+список|раскрывающ\w+\s+список|закодир\w*\s+(?:фо|регион|страт|федеральн\w+\s+округ)|Q(?:region|district|strata)/iu.test(text);
+      const hasResidenceCityText = /(?:в\s+каком|какой)\s+(?:городе|населенн?ом\s+пункте)[\s\S]{0,120}(?:прожива|живете|живёте)/iu.test(text)
+        || /город(?:е)?\/населенн?ом\s+пункте/iu.test(text)
+        || /укажите[\s\S]{0,80}(?:ваш\s+)?(?:город|населенн?ый\s+пункт)[\s\S]{0,120}(?:прожива|живете|живёте|живете\s+постоянно|живёте\s+постоянно)?/iu.test(text)
+        || /город[\s\S]{0,80}(?:проживания|постоянно(?:го)?\s+прожив)/iu.test(text);
       return /\bQcity\b/i.test(text)
-        || /(?:в\s+каком|какой)\s+(?:городе|населенн?ом\s+пункте)[\s\S]{0,120}(?:прожива|живете|живёте)/iu.test(text)
-        || /город(?:е)?\/населенн?ом\s+пункте/iu.test(text);
+        || /\bCITY\b/i.test(codeText)
+        || hasResidenceCityText
+        || (hasGeoInstruction && /город|населенн?ый\s+пункт|регион\s+прожив/iu.test(text))
+        || (hasCustomGeoCityOptions(q) && /город|населенн?ый\s+пункт/iu.test(text));
+    }
+
+    function hasCustomGeoCityOptions(q) {
+      return customGeoCityOptions(q).length >= 2;
     }
 
     function inferGeoThreshold(q) {
