@@ -2747,6 +2747,14 @@
       const flags = [];
       const normalizedCode = String(code || "").trim();
       const normalizedText = String(text || "").trim();
+      if (state.expressMode) {
+        if (!expressOptionHasClosedMarker(normalizedText) && (isExpressOtherOptionText(normalizedText) || expressOptionHasOpenMarker(normalizedText))) flags.push("other");
+        if (regularOptionHasExplicitExclusiveMarker(normalizedText) || regularOptionLooksNoneExclusive(normalizedText, normalizedCode)) {
+          flags.push("exclusive");
+          flags.push("fix");
+        }
+        return [...new Set(flags)];
+      }
       if (isRegularOtherOptionText(normalizedText, normalizedCode)) flags.push("other");
       if (regularOptionHasExplicitExclusiveMarker(normalizedText) || regularOptionLooksNoneExclusive(normalizedText, normalizedCode)) flags.push("exclusive");
       if (normalizedCode === "98" || /РґСЂСѓРіРѕРµ(?:\s*\((?:СѓС‚РѕС‡РЅРёС‚Рµ|СѓРєР°Р¶РёС‚Рµ)\))?/i.test(normalizedText)) flags.push("other");
@@ -3667,7 +3675,8 @@
 
     function applyExpressRules(q) {
       if (!q || (q.kind || "question") !== "question") return;
-      q.type = inferExpressTypeFromTexts(questionContextTexts(q), q.type, q.options);
+      const maxAnswers = inferMaxAnswers(q);
+      q.type = maxAnswers && maxAnswers > 1 ? "Multi" : inferExpressTypeFromTexts(questionContextTexts(q), q.type, q.options);
       if (!q.script_rotation_mode) q.script_rotation_mode = q.script_options_randomize ? "simple" : "none";
       const groups = inferExpressRotationGroups(q);
       if (groups.length) {
@@ -3830,7 +3839,7 @@
     }
 
     function inlineServiceInstructionPattern() {
-      return /(?:^|[\s.?!;:])((?:КОНТРОЛЬ\s+РАВЕНСТВА\s+ПРОПОРЦИЙ|ВОЗМОЖЕН\s+ВЫБОР\s+НЕСКОЛЬКИХ\s+ВАРИАНТОВ|ОДИН\s+ВАРИАНТ\s+ОТВЕТА|МНОЖЕСТВЕННЫЙ\s+ОТВЕТ|ПОКАЗЫВАЕМ[^.?!;:]*(?:ЛОГОТИП|ЛОГО|КРЕАТИВ|КАРТИНК|ИЗОБРАЖЕНИ|ФОТО))[^.?!;:]*(?:[.?!;:]|$))/giu;
+      return /(?:^|[\s.?!;:])((?:КОНТРОЛЬ\s+РАВЕНСТВА\s+ПРОПОРЦИЙ|ВОЗМОЖЕН\s+ВЫБОР\s+НЕСКОЛЬКИХ\s+ВАРИАНТОВ|ОДИН\s+(?:ВАРИАНТ\s+)?ОТВЕТА?|МНОЖЕСТВЕНН(?:ЫЙ|ЫЕ)\s+(?:ОТВЕТ|ВЫБОР)|ВЫБОР\s+\d{1,2}\s*-?\s*Х?\s+ВАРИАНТОВ|(?:ДО|МАКС\.?|МАКСИМУМ)\s+(?:\d{1,2}\s*-?\s*Х?|\p{L}+)\s+(?:ОТВЕТ|ВАРИАНТ)|РОТАЦИЯ|РОТИРОВАТЬ|ПОКАЗЫВАЕМ[^.?!;:]*(?:ЛОГОТИП|ЛОГО|КРЕАТИВ|КАРТИНК|ИЗОБРАЖЕНИ|ФОТО))[^.?!;:]*(?:[.?!;:]|$))/giu;
     }
 
     function extractInlineServiceInstructions(text) {
@@ -3939,7 +3948,7 @@
 
     function inferExpressTypeFromTexts(texts, fallbackType, options) {
       const text = normalizeWhitespace((texts || []).join(" "));
-      if (/(\u043c\u043d\u043e\u0436\u0435\u0441\u0442\u0432\u0435\u043d|\u043d\u0435\u0441\u043a\u043e\u043b\u044c\u043a\u043e\s+\u043e\u0442\u0432\u0435\u0442|(?:\u0434\u043e|\u043d\u0435\s+\u0431\u043e\u043b\u0435\u0435|\u043c\u0430\u043a\u0441\u0438\u043c\u0443\u043c)\s+(?:\d{1,2}|\u043e\u0434\u043d(?:\u043e\u0433\u043e|\u0443|\u0438\u043c|\u0438\u043d)|\u0434\u0432(?:\u0443\u0445|\u0430|\u0435)|\u0442\u0440[\u0435\u0451]\u0445|\u0442\u0440\u0438|\u0447\u0435\u0442\u044b\u0440[\u0435\u0451]\u0445|\u0447\u0435\u0442\u044b\u0440\u0435|\u043f\u044f\u0442\u0438|\u043f\u044f\u0442\u044c|\u0448\u0435\u0441\u0442\u0438|\u0448\u0435\u0441\u0442\u044c|\u0441\u0435\u043c\u0438|\u0441\u0435\u043c\u044c|\u0432\u043e\u0441\u044c\u043c\u0438|\u0432\u043e\u0441\u0435\u043c\u044c|\u0434\u0435\u0432\u044f\u0442\u0438|\u0434\u0435\u0432\u044f\u0442\u044c|\u0434\u0435\u0441\u044f\u0442\u0438|\u0434\u0435\u0441\u044f\u0442\u044c)\s+(?:\u0432\u0430\u0440\u0438\u0430\u043d\u0442|\u043e\u0442\u0432\u0435\u0442)|\u043c\u0430\u043a\u0441\.?\s*\d{1,2})/iu.test(text)) return "Multi";
+      if (hasMultiTypeInstruction(text) || /(?:\u043c\u0430\u043a\u0441\.?\s*\d{1,2}|\u0434\u043e\s+\d{1,2}\s*(?:-?\s*\u0445)?\s+(?:\u0432\u0430\u0440\u0438\u0430\u043d\u0442|\u043e\u0442\u0432\u0435\u0442))/iu.test(text)) return "Multi";
       if (/(\u043e\u0434\u0438\u043d\s+\u043e\u0442\u0432\u0435\u0442|\u043e\u0434\u0438\u043d\u043e\u0447\u043d)/iu.test(text)) return "Single";
       if ((options || []).length) return fallbackType === "Multi" ? "Multi" : "Single";
       return fallbackType;
@@ -4179,7 +4188,9 @@
         || /\u0432\u043e\u0437\u043c\u043e\u0436\u043d\u043e\s+\u043d\u0435\u0441\u043a\u043e\u043b\u044c\u043a\u043e(?:\s+(?:\u043e\u0442\u0432\u0435\u0442|\u0432\u0430\u0440\u0438\u0430\u043d\u0442))?/iu.test(clean)
         || /(?:\u0432\u044b\u0431\u0435\u0440\u0438\u0442\u0435|\u043e\u0442\u043c\u0435\u0442\u044c\u0442\u0435)\s+\u0432\u0441\u0435(?:\s+\u043f\u043e\u0434\u0445\u043e\u0434\u044f\u0449\p{L}*)?/iu.test(clean)
         || /(?:\u043c\u043e\u0436\u043d\u043e\s+)?(?:\u0432\u044b\u0431\u0440\u0430\u0442\u044c|\u043e\u0442\u043c\u0435\u0442\u0438\u0442\u044c)\s+\u043d\u0435\u0441\u043a\u043e\u043b\u044c\u043a\u043e/iu.test(clean)
-        || /(?:\u043d\u0435\s+\u0431\u043e\u043b\u0435\u0435|\u0434\u043e|\u043c\u0430\u043a\u0441\u0438\u043c\u0443\u043c)\s+\d{1,2}\s+(?:\u043e\u0442\u0432\u0435\u0442|\u0432\u0430\u0440\u0438\u0430\u043d\u0442)/iu.test(clean)
+        || /(?:\u043d\u0435\s+\u0431\u043e\u043b\u0435\u0435|\u0434\u043e|\u043c\u0430\u043a\u0441\u0438\u043c\u0443\u043c)\s+\d{1,2}\s*(?:-?\s*\u0445)?\s+(?:\u043e\u0442\u0432\u0435\u0442|\u0432\u0430\u0440\u0438\u0430\u043d\u0442)/iu.test(clean)
+        || /\u0432\u044b\u0431\u043e\u0440\s+\d{1,2}\s*(?:-?\s*\u0445)?\s+\u0432\u0430\u0440\u0438\u0430\u043d\u0442/iu.test(clean)
+        || /(?:\u0434\u043e|\u043c\u0430\u043a\u0441(?:\.|\u0438\u043c\u0443\u043c)?)\s+(?:\u0434\u0432(?:\u0443\u0445|\u0430|\u0435)|\u0442\u0440[\u0435\u0451]\u0445|\u0442\u0440\u0438|\u0447\u0435\u0442\u044b\u0440[\u0435\u0451]\u0445|\u0447\u0435\u0442\u044b\u0440\u0435|\u043f\u044f\u0442\u0438|\u043f\u044f\u0442\u044c)\s+(?:\u043e\u0442\u0432\u0435\u0442|\u0432\u0430\u0440\u0438\u0430\u043d\u0442)/iu.test(clean)
         || /\u0431\u043e\u043b\u0435\u0435\s+\u043e\u0434\u043d\u043e\u0433\u043e\s+\u043e\u0442\u0432\u0435\u0442\u0430/iu.test(clean);
     }
 
@@ -4266,6 +4277,12 @@
       }
       if (options.length && hasMultiTypeInstruction([base.title, ...base.instructions, ...qBlocks.map(block => block.text)].join(" "))) {
         type = "Multi";
+      }
+      if (state.expressMode) {
+        const inlineCondition = extractExpressInlineConditionFromTitle(base.title);
+        if (inlineCondition && !routing.some(item => normalizeWhitespace(routingText(item)) === normalizeWhitespace(inlineCondition))) {
+          routing.push({ kind: "condition", text: inlineCondition, quota_refs: extractQuotaRefs(inlineCondition) });
+        }
       }
 
       const expressInstructionIds = new Set(expressDetected?.instructionBlocks || []);
@@ -5441,8 +5458,19 @@ final: ${escapeHtml(draft.final_code || "")}
     function stripExpressInlineConditionFromTitle(value) {
       let clean = String(value || "");
       clean = clean.replace(/\?\s*(?:для|задать(?:,?\s*если)?|задавать(?:,?\s*если)?|показывать(?:,?\s*если)?|показать(?:,?\s*если)?)\s+Q[A-Za-z0-9_.]+\s*=\s*[\d,\sи\-–—]+\.?\s*$/iu, "?");
+      clean = clean.replace(/\?\s*если\s+Q[A-Za-z0-9_.]+\s*=\s*[\d,\sи\-–—]+[\s\S]*$/iu, "?");
+      clean = clean.replace(/\?\s*(?:для|задать(?:,?\s*если)?|задавать(?:,?\s*если)?|показывать(?:,?\s*если)?|показать(?:,?\s*если)?)\s+Q[A-Za-z0-9_.]+\s*=\s*[\d,\sи\-–—]+[\s\S]*$/iu, "?");
       clean = clean.replace(/\?\s*(?:тем,?\s+кто|для\s+тех,?\s+кто)\s+[\s\S]{0,120}?\s+в\s+Q[A-Za-z0-9_.]+\.?\s*$/iu, "?");
       return clean;
+    }
+
+    function extractExpressInlineConditionFromTitle(value) {
+      const clean = normalizeWhitespace(stripExpressColoredSpanMarkup(value || ""));
+      if (!clean) return "";
+      const questionTail = clean.match(/\?\s*((?:если|для|задать(?:,?\s*если)?|задавать(?:,?\s*если)?|показывать(?:,?\s*если)?|показать(?:,?\s*если)?|тем,?\s+кто|для\s+тех,?\s+кто)\s+[\s\S]+)$/iu);
+      if (questionTail) return questionTail[1];
+      const leadingTail = clean.match(/^Q[A-Za-z0-9_.]+\s+((?:для|задать(?:,?\s*если)?|задавать(?:,?\s*если)?|показывать(?:,?\s*если)?|показать(?:,?\s*если)?)\s+[\s\S]+?)\s+Q[A-Za-z0-9_.]+\./iu);
+      return leadingTail ? leadingTail[1] : "";
     }
 
     function isExpressInlineConditionTitleBlock(ref) {
@@ -5875,6 +5903,12 @@ final: ${escapeHtml(draft.final_code || "")}
           })
       ]);
       q.routing = q.routing_blocks.filter(ref => !isIgnored(ref)).map(ref => parseRouting(refText(ref))).filter(Boolean);
+      if (state.expressMode) {
+        const inlineCondition = extractExpressInlineConditionFromTitle(q.title || "");
+        if (inlineCondition && !q.routing.some(item => normalizeWhitespace(routingText(item)) === normalizeWhitespace(inlineCondition))) {
+          q.routing.push({ kind: "condition", text: inlineCondition, quota_refs: extractQuotaRefs(inlineCondition) });
+        }
+      }
       q.options = q.option_blocks.filter(ref => !isIgnored(ref)).map((ref, index) => {
         const block = state.blocks.find(item => item.id === refBase(ref));
         const text = refText(ref);
@@ -6075,7 +6109,40 @@ final: ${escapeHtml(draft.final_code || "")}
       if (!state.expressMode) {
         sections.push(buildControlQuestionBlock());
       }
-      return normalizeScriptDashes(sections.join("\n\n"));
+      const text = normalizeScriptDashes(sections.join("\n\n"));
+      return state.expressMode ? normalizeExpressScriptOptionMarkers(text) : text;
+    }
+
+    function normalizeExpressScriptOptionMarkers(text) {
+      const lines = String(text || "").split(/\r?\n/);
+      const output = [];
+      let inOptions = false;
+      let currentType = "";
+      lines.forEach((line, index) => {
+        const clean = normalizeWhitespace(line);
+        if (/^type:\s*/iu.test(clean)) currentType = clean.replace(/^type:\s*/iu, "");
+        if (/^options:\s*$/iu.test(clean)) inOptions = true;
+        else if (/^[A-Za-z][A-Za-z0-9_-]*:\s*/u.test(clean) && !/^(other|exclusive|fix):\s*yes\b/iu.test(clean)) inOptions = false;
+
+        const optionMatch = inOptions ? line.match(/^(\s*\d{1,4}\.\s*)(.+)$/u) : null;
+        if (!optionMatch) {
+          output.push(line);
+          return;
+        }
+
+        let optionText = optionMatch[2];
+        const source = decodeScriptQuoteEntities(optionText);
+        const needsOther = !expressOptionHasClosedMarker(source) && expressOptionHasOpenMarker(source);
+        const needsExclusive = /^Multi$/i.test(currentType) && expressOptionHasExclusiveMarker(source);
+        optionText = stripExpressPlainServiceSuffix(source);
+        output.push(`${optionMatch[1]}${optionText}`.trimEnd());
+
+        const lookahead = lines.slice(index + 1, index + 5).map(item => normalizeWhitespace(item));
+        if (needsOther && !lookahead.some(item => /^other:\s*yes\b/iu.test(item))) output.push("other: yes");
+        if (needsExclusive && !lookahead.some(item => /^exclusive:\s*yes\b/iu.test(item))) output.push("exclusive: yes");
+        if (needsExclusive && !lookahead.some(item => /^fix:\s*yes\b/iu.test(item))) output.push("fix: yes");
+      });
+      return output.join("\n");
     }
 
     function qscreenAfterQuestionId() {
@@ -6875,9 +6942,14 @@ final: ${escapeHtml(draft.final_code || "")}
       if (geoTemplateComment) {
         lines.push(geoTemplateComment);
       }
+      const maxAnswers = inferMaxAnswers(q);
+      const outputType = state.expressMode && maxAnswers && maxAnswers > 1 ? "Multi" : scriptQuestionType(q);
+      if (outputType === "Multi") {
+        q.type = "Multi";
+      }
       lines.push(title ? `${code}. ${title}` : `${code}.`);
-      lines.push(`type: ${scriptQuestionType(q)}`);
-      if (scriptQuestionType(q) === "Grid") {
+      lines.push(`type: ${outputType}`);
+      if (outputType === "Grid") {
         lines.push("template: buttons");
       }
 
@@ -6893,7 +6965,6 @@ final: ${escapeHtml(draft.final_code || "")}
         lines.push("columns: 2");
       }
 
-      const maxAnswers = inferMaxAnswers(q);
       if (maxAnswers) {
         lines.push(`max: ${maxAnswers}`);
       }
@@ -7209,6 +7280,7 @@ final: ${escapeHtml(draft.final_code || "")}
 
     function geoTemplateCommentLine(q) {
       const template = geoTemplateForQuestion(q);
+      if (state.expressMode) return "";
       if (String(q?.geo_city_threshold || "") === "custom") return "//без шаблона";
       if (!template) return "";
       return `//шаблон ${template.threshold} ${template.includeCrimea ? "с Крымом" : "без Крыма"}`;
@@ -8375,14 +8447,14 @@ final: ${escapeHtml(draft.final_code || "")}
         .replace(/^(?:задать|задавать|задаем|задаём|показывать|показать)\s+(?:тем,?\s+кто|для\s+тех,?\s+кто)\s+/iu, "")
         .replace(/^(?:тем,?\s+кто|для\s+тех,?\s+кто)\s+/iu, "")
         .replace(/^если\s+/iu, "");
-      const match = conditionOnly.match(/(?:^|\b)(?:для\s+)?(Q?[A-Za-z]{1,16}\d[A-Za-z0-9_.]*)\s*=\s*([\d,\sи\-–—]+)/iu);
+      const match = conditionOnly.match(/(?:^|\b)(?:для\s+)?(Q?[A-Za-z]{1,16}\d[A-Za-z0-9_.]*)\s*(=|==|<>|!=|≠)\s*([\d,\sи\-–—]+)/iu);
       if (!match) return "";
       const code = normalizeCode(match[1]);
-      const values = parseNumberList(match[2]);
+      const values = parseNumberList(match[3]);
       if (!code || !values.length) return "";
       const variable = `$${code}`;
       const sourceQuestion = (state.questions || []).find(q => normalizeCode(q.normalized_code || q.code || "") === code);
-      return formatAnswerCondition(variable, values, scriptQuestionType(sourceQuestion), false);
+      return formatAnswerCondition(variable, values, scriptQuestionType(sourceQuestion), /^(?:<>|!=|≠)$/.test(match[2]));
     }
 
     function normalizeSimpleAnswerCondition(text) {
@@ -8778,6 +8850,10 @@ final: ${escapeHtml(draft.final_code || "")}
       if ((q.kind || "question") === "info") return "Info";
       if (isGeoCityQuestion(q)) return "Single";
       if (isGenderQuestion(q)) return "Single";
+      if (state.expressMode) {
+        const maxAnswers = inferMaxAnswers(q);
+        if (maxAnswers && maxAnswers > 1) return "Multi";
+      }
       return q.type || "Unknown";
     }
 
@@ -8799,16 +8875,16 @@ final: ${escapeHtml(draft.final_code || "")}
 
     function inferMaxAnswers(q) {
       const text = normalizeWhitespace(questionContextTexts(q).join(" ")).toLowerCase();
-      const numberPattern = "(\\d{1,2}|одн(?:ого|у|им|ин)|дв(?:ух|а|е)|тр[её]х|три|четыр[её]х|четыре|пяти|пять|шести|шесть|семи|семь|восьми|восемь|девяти|девять|десяти|десять)";
+      const numberPattern = "(\\d{1,2}(?:\\s*-?\\s*х)?|одн(?:ого|у|им|ин)|дв(?:ух|а|е)|тр[её]х|три|четыр[её]х|четыре|пяти|пять|шести|шесть|семи|семь|восьми|восемь|девяти|девять|десяти|десять)";
       const wordEnd = "(?=$|[^\\p{L}\\d_])";
-      const match = text.match(new RegExp(`(?:множественн(?:ый|ые)\\s+(?:выбор|ответ)[а-яё]*\\s+)?до\\s+${numberPattern}\\s+(?:вариант|ответ)[а-яё]*${wordEnd}|(?:не\\s+более|максимум)\\s+${numberPattern}(?:\\s+(?:вариант|ответ)[а-яё]*)?${wordEnd}|макс\\.?\\s*${numberPattern}${wordEnd}`, "iu"));
+      const match = text.match(new RegExp(`(?:множественн(?:ый|ые)\\s+(?:выбор|ответ)[а-яё]*\\s+)?до\\s+${numberPattern}\\s+(?:вариант|ответ)[а-яё]*${wordEnd}|(?:не\\s+более|максимум)\\s+${numberPattern}(?:\\s+(?:вариант|ответ)[а-яё]*)?${wordEnd}|макс\\.?\\s*${numberPattern}${wordEnd}|выбор\\s+${numberPattern}\\s+вариант[а-яё]*${wordEnd}`, "iu"));
       if (!match) return null;
-      const value = parseRussianSmallNumber(match[1] || match[2] || match[3]);
+      const value = parseRussianSmallNumber(match[1] || match[2] || match[3] || match[4]);
       return Number.isInteger(value) && value > 0 ? value : null;
     }
 
     function parseRussianSmallNumber(value) {
-      const clean = normalizeWhitespace(value || "").toLowerCase();
+      const clean = normalizeWhitespace(value || "").toLowerCase().replace(/\s*-?\s*х$/iu, "");
       if (/^\d{1,2}$/.test(clean)) return Number(clean);
       const map = new Map([
         ["один", 1], ["одного", 1], ["одну", 1], ["одним", 1],
@@ -8834,7 +8910,7 @@ final: ${escapeHtml(draft.final_code || "")}
       let text = normalizeWhitespace(option?.text || "");
       let htmlText = normalizeHtmlWhitespace(option?.htmlText || option?.html_text || escapeHtml(text));
       const plainSourceText = normalizeWhitespace(stripExpressHtmlTags([htmlText, option?.html_text, text].filter(Boolean).join(" ")));
-      if (flags.has("other") && !isExpressOtherOptionText(plainSourceText) && String(option?.code || "").trim() !== "98") {
+      if (flags.has("other") && !isExpressOtherOptionText(plainSourceText)) {
         flags.delete("other");
       }
       if (isExpressOtherOptionText(plainSourceText)) {
@@ -8848,7 +8924,15 @@ final: ${escapeHtml(draft.final_code || "")}
       htmlText = stripExpressTrailingMarker(htmlText, completePattern);
       text = stripExpressGotoMarker(text);
       htmlText = stripExpressGotoMarker(htmlText);
-      const markerPattern = /(?:\s*(?:[-–—,;:]|\(|\[)\s*)?(открыт(?:ый|ая|ое|ые)(?:\s+вопрос)?|exclusive|исключающ(?:ий|ая|ее|ие|их|его|ему|им)?(?:\s+вариант\p{L}*)?)(?:\s*[\])])?\s*$/iu;
+      const markerPattern = /(?:\s*(?:[-–—,;:\/]|\(|\[)\s*)?(открыт(?:ый|ая|ое|ые)(?:\s+(?:ответ|вопрос))?|exclusive|эксклюзив(?:н(?:ый|ая|ое|ые))?|исключающ(?:ий|ая|ее|ие|их|его|ему|им)?(?:\s+вариант\p{L}*)?)(?:\s*[\])])?\s*$/iu;
+      const markerSource = normalizeWhitespace(stripExpressHtmlTags([htmlText, text].filter(Boolean).join(" ")));
+      if (expressOptionHasOpenMarker(markerSource)) {
+        flags.add("other");
+      }
+      if (expressOptionHasExclusiveMarker(markerSource)) {
+        flags.add("exclusive");
+        flags.add("fix");
+      }
 
       for (let guard = 0; guard < 3; guard += 1) {
         const match = text.match(markerPattern);
@@ -8856,9 +8940,8 @@ final: ${escapeHtml(draft.final_code || "")}
         const marker = match[1].toLowerCase();
         if (marker.startsWith("открыт")) {
           flags.add("other");
-          flags.add("fix");
         }
-        if (marker.startsWith("exclusive") || marker.startsWith("исключающ")) {
+        if (marker.startsWith("exclusive") || marker.startsWith("эксклюзив") || marker.startsWith("исключающ")) {
           flags.add("exclusive");
           flags.add("fix");
         }
@@ -8878,8 +8961,36 @@ final: ${escapeHtml(draft.final_code || "")}
       htmlText = stripExpressGotoMarker(htmlText);
       text = stripExpressPlainServiceSuffix(text);
       if (htmlText) text = normalizeWhitespace(stripExpressHtmlTags(htmlText));
+      text = stripExpressPlainServiceSuffix(text);
       if (hasClosedMarker) flags.delete("other");
       return { ...option, text, htmlText: htmlText || escapeHtml(text), flags: Array.from(flags) };
+    }
+
+    function expressOptionHasClosedMarker(value) {
+      const clean = normalizeWhitespace(stripExpressHtmlTags(value || ""));
+      return /(?:^|[^\p{L}\d_])\u0437\u0430\u043a\u0440\u044b\u0442(?:\u044b\u0439|\u0430\u044f|\u043e\u0435|\u044b\u0435)?(?=$|[^\p{L}\d_])/iu.test(clean);
+    }
+
+    function expressOptionHasOpenMarker(value) {
+      const clean = normalizeWhitespace(stripExpressHtmlTags(value || ""));
+      return /(?:^|[^\p{L}\d_])открыт(?:ый|ая|ое|ые)?(?:\s+(?:ответ|вопрос))?(?=$|[^\p{L}\d_])/iu.test(clean);
+    }
+
+    function expressOptionHasExclusiveMarker(value) {
+      const clean = normalizeWhitespace(stripExpressHtmlTags(value || ""));
+      return /(?:^|[^\p{L}\d_])(?:exclusive|эксклюзив(?:н(?:ый|ая|ое|ые))?|исключающ(?:ий|ая|ее|ие|их|его|ему|им)?(?:\s+вариант\p{L}*)?)(?=$|[^\p{L}\d_])/iu.test(clean);
+    }
+
+    function expressQuestionContextHasMarkedOption(q, optionText, markerKind) {
+      if (!state.expressMode || !q || !optionText) return false;
+      const cleanOption = normalizeWhitespace(stripExpressPlainServiceSuffix(stripExpressHtmlTags(optionText))).replace(/[.?!;:]+$/u, "");
+      if (!cleanOption || cleanOption.length < 3) return false;
+      const context = normalizeWhitespace(questionRangeBlocks(q).map(ref => refText(ref)).filter(Boolean).join(" "));
+      if (!context) return false;
+      const markerPattern = markerKind === "open"
+        ? "открыт(?:ый|ая|ое|ые)?(?:\\s+(?:ответ|вопрос))?"
+        : "(?:exclusive|эксклюзив(?:н(?:ый|ая|ое|ые))?|исключающ(?:ий|ая|ее|ие|их|его|ему|им)?(?:\\s+вариант\\p{L}*)?)";
+      return new RegExp(`${escapeRegExp(cleanOption)}\\s*(?:[-–—,;:\\/]\\s*)?${markerPattern}`, "iu").test(context);
     }
 
     function normalizeRegularOptionServiceMarker(option) {
@@ -8946,9 +9057,9 @@ final: ${escapeHtml(draft.final_code || "")}
 
     function stripExpressServiceHtmlMarkers(value) {
       let clean = String(value || "");
-      const serviceTextPattern = /(?:^|\s|[-\u2013\u2014вЂ“вЂ”,;:])(?:complete|\u043a\u043e\u043c\u043f\u043b\u0438\u0442|\u0437\u0430\u043a\u043e\u043d\u0447\w*|\u0437\u0430\u0432\u0435\u0440\u0448\w*|\u043e\u0442\u043a\u0440\u044b\u0442(?:\u044b\u0439|\u0430\u044f|\u043e\u0435|\u044b\u0435)?(?:\s+\u0432\u043e\u043f\u0440\u043e\u0441)?|exclusive|\u0438\u0441\u043a\u043b\u044e\u0447\u0430\u044e\u0449(?:\u0438\u0439|\u0430\u044f|\u0435\u0435|\u0438\u0435|\u0438\u0445|\u0435\u0433\u043e|\u0435\u043c\u0443|\u0438\u043c)?(?:\s+\u0432\u0430\u0440\u0438\u0430\u043d\u0442\p{L}*)?|РєРѕРјРїР»РёС‚|Р·Р°РєРѕРЅС‡\w*|Р·Р°РІРµСЂС€\w*|РѕС‚РєСЂС‹С‚(?:С‹Р№|Р°СЏ|РѕРµ|С‹Рµ)?(?:\s+РІРѕРїСЂРѕСЃ)?)\s*$/iu;
+      const serviceTextPattern = /(?:^|\s|[-\u2013\u2014вЂ“вЂ”,;:\/])(?:complete|\u043a\u043e\u043c\u043f\u043b\u0438\u0442|\u0437\u0430\u043a\u043e\u043d\u0447\w*|\u0437\u0430\u0432\u0435\u0440\u0448\w*|\u043e\u0442\u043a\u0440\u044b\u0442(?:\u044b\u0439|\u0430\u044f|\u043e\u0435|\u044b\u0435)?(?:\s+(?:\u043e\u0442\u0432\u0435\u0442|\u0432\u043e\u043f\u0440\u043e\u0441))?|exclusive|\u044d\u043a\u0441\u043a\u043b\u044e\u0437\u0438\u0432(?:\u043d(?:\u044b\u0439|\u0430\u044f|\u043e\u0435|\u044b\u0435))?|\u0438\u0441\u043a\u043b\u044e\u0447\u0430\u044e\u0449(?:\u0438\u0439|\u0430\u044f|\u0435\u0435|\u0438\u0435|\u0438\u0445|\u0435\u0433\u043e|\u0435\u043c\u0443|\u0438\u043c)?(?:\s+\u0432\u0430\u0440\u0438\u0430\u043d\u0442\p{L}*)?|РєРѕРјРїР»РёС‚|Р·Р°РєРѕРЅС‡\w*|Р·Р°РІРµСЂС€\w*|РѕС‚РєСЂС‹С‚(?:С‹Р№|Р°СЏ|РѕРµ|С‹Рµ)?(?:\s+(?:РѕС‚РІРµС‚|РІРѕРїСЂРѕСЃ))?)\s*$/iu;
       for (let guard = 0; guard < 3; guard += 1) {
-        const spanMatch = clean.match(/(?:\s*(?:[-\u2013\u2014вЂ“вЂ”,;:]|\(|\[)\s*)?<span\b[^>]*>\s*([^<]+?)\s*<\/span>\s*$/iu);
+        const spanMatch = clean.match(/(?:\s*(?:[-\u2013\u2014вЂ“вЂ”,;:\/]|\(|\[)\s*)?<span\b[^>]*>\s*([^<]+?)\s*<\/span>\s*$/iu);
         if (!spanMatch || !serviceTextPattern.test(spanMatch[1])) break;
         clean = clean.slice(0, spanMatch.index).replace(/\s*[-\u2013\u2014вЂ“вЂ”,;:([]\s*$/u, "").trim();
       }
@@ -9011,7 +9122,7 @@ final: ${escapeHtml(draft.final_code || "")}
     }
 
     function scriptOptionLines(q) {
-      if (isGeoCityQuestion(q)) {
+      if (isGeoCityQuestion(q) && (!state.expressMode || !(Array.isArray(q.options) && q.options.length))) {
         if (isCustomGeoCityQuestion(q)) return customGeoScriptOptionLines(q);
         const lines = geoCityOptions(q).map(row => `${row.code}. ${decodeScriptQuoteEntities(escapeHtml(row.city))}`);
         const otherOption = geoOtherOption(q);
@@ -9070,9 +9181,22 @@ final: ${escapeHtml(draft.final_code || "")}
       const lines = [];
       const rotationFixedCodes = new Set(state.expressMode ? extractRotationExceptCodesSafe(q) : extractRotationFixedCodes(q));
       const rotationOnlyCodes = rotationFixedCodes.size ? new Set() : new Set(extractRotationOnlyCodes(q));
-      options.forEach((option) => {
+      options.forEach((option, optionIndex) => {
+        const sourceOptionMarker = state.expressMode
+          ? normalizeWhitespace(stripExpressHtmlTags([option?.htmlText, option?.html_text, option?.text].filter(Boolean).join(" ")))
+          : "";
         option = state.expressMode ? normalizeExpressOptionMarker(option) : normalizeRegularOptionServiceMarker(option);
+        const normalizedOptionMarker = state.expressMode
+          ? normalizeWhitespace(stripExpressHtmlTags([option?.htmlText, option?.text].filter(Boolean).join(" ")))
+          : "";
         const code = normalizeWhitespace(option.code || "");
+        const sourceQuestionOption = state.expressMode && code
+          ? (q.options || []).find(item => normalizeWhitespace(item?.code || "") === code)
+          : null;
+        const sourceQuestionOptionMarker = sourceQuestionOption
+          ? normalizeWhitespace(stripExpressHtmlTags([sourceQuestionOption?.htmlText, sourceQuestionOption?.html_text, sourceQuestionOption?.text].filter(Boolean).join(" ")))
+          : "";
+        const sourceQuestionOptionFlags = new Set(Array.isArray(sourceQuestionOption?.flags) ? sourceQuestionOption.flags : []);
         let text = option.htmlText || escapeHtml(option.text || "");
         const generatedText = generatedSource ? generatedOptionText(q, code, text, pipingSourceCode) : "";
         if (generatedText) text = generatedText;
@@ -9097,8 +9221,8 @@ final: ${escapeHtml(draft.final_code || "")}
         const exportsRandomize = shouldExportOptionsRandomize(q);
         const isGroupedRotationExport = q.script_rotation_mode === "groups";
         const optionMarkerSource = [text, option.condition].filter(Boolean).join(" ");
-        if (!flags.has("other") && (state.expressMode ? isExpressOtherOptionText(optionMarkerSource) : isRegularOtherOptionText(optionMarkerSource, code))) flags.add("other");
-        if (isMultiQuestion && !flags.has("exclusive") && (regularOptionHasExplicitExclusiveMarker(optionMarkerSource) || regularOptionLooksNoneExclusive(optionMarkerSource, code))) flags.add("exclusive");
+        if (!flags.has("other") && (state.expressMode ? (isExpressOtherOptionText(optionMarkerSource) || expressQuestionContextHasMarkedOption(q, text, "open")) : isRegularOtherOptionText(optionMarkerSource, code))) flags.add("other");
+        if (isMultiQuestion && !flags.has("exclusive") && (state.expressMode ? expressQuestionContextHasMarkedOption(q, text, "exclusive") : (regularOptionHasExplicitExclusiveMarker(optionMarkerSource) || regularOptionLooksNoneExclusive(optionMarkerSource, code)))) flags.add("exclusive");
         if (exportsRandomize && rotationFixedCodes.size && !rotationFixedCodes.has(String(code)) && !flags.has("other") && !flags.has("exclusive")) flags.delete("fix");
         if (exportsRandomize && !isGroupedRotationExport && rotationOnlyCodes.size && !rotationOnlyCodes.has(String(code))) flags.add("fix");
         if (exportsRandomize && !isGroupedRotationExport && rotationFixedCodes.has(String(code))) flags.add("fix");
@@ -9114,12 +9238,48 @@ final: ${escapeHtml(draft.final_code || "")}
         if (!isMultiQuestion) {
           flags.delete("exclusive");
         }
+        if (state.expressMode) {
+          const finalMarkerSource = decodeScriptQuoteEntities(text);
+          const hasExpressClosedMarker = expressOptionHasClosedMarker(sourceQuestionOptionMarker) || expressOptionHasClosedMarker(sourceOptionMarker) || expressOptionHasClosedMarker(normalizedOptionMarker) || expressOptionHasClosedMarker(finalMarkerSource);
+          if (!hasExpressClosedMarker && (expressOptionHasOpenMarker(sourceOptionMarker) || isExpressOtherOptionText(sourceOptionMarker) || expressOptionHasOpenMarker(finalMarkerSource) || isExpressOtherOptionText(finalMarkerSource) || expressQuestionContextHasMarkedOption(q, finalMarkerSource, "open"))) {
+            flags.add("other");
+          }
+          if (isMultiQuestion && (expressOptionHasExclusiveMarker(finalMarkerSource) || expressQuestionContextHasMarkedOption(q, finalMarkerSource, "exclusive"))) {
+            flags.add("exclusive");
+            flags.add("fix");
+          }
+          text = stripExpressPlainServiceSuffix(finalMarkerSource);
+        }
+        const hasExpressClosedMarker = state.expressMode && (expressOptionHasClosedMarker(sourceQuestionOptionMarker) || expressOptionHasClosedMarker(sourceOptionMarker) || expressOptionHasClosedMarker(normalizedOptionMarker));
+        const needsExpressOtherFlag = state.expressMode && !hasExpressClosedMarker && (sourceQuestionOptionFlags.has("other") || expressOptionHasOpenMarker(sourceQuestionOptionMarker) || isExpressOtherOptionText(sourceQuestionOptionMarker) || expressOptionHasOpenMarker(sourceOptionMarker) || isExpressOtherOptionText(sourceOptionMarker) || expressOptionHasOpenMarker(normalizedOptionMarker) || isExpressOtherOptionText(normalizedOptionMarker));
+        const needsExpressExclusiveFlag = state.expressMode && isMultiQuestion && (sourceQuestionOptionFlags.has("exclusive") || expressOptionHasExclusiveMarker(sourceQuestionOptionMarker) || expressOptionHasExclusiveMarker(sourceOptionMarker) || expressOptionHasExclusiveMarker(normalizedOptionMarker));
         const optionLineText = decodeScriptQuoteEntities(text);
         lines.push(code ? `${code}. ${optionLineText}`.trimEnd() : optionLineText.trimEnd());
-        if (flags.has("other")) lines.push("other: yes");
-        if (flags.has("exclusive")) lines.push("exclusive: yes");
-        if (flags.has("fix")) lines.push("fix: yes");
+        if (flags.has("other") || needsExpressOtherFlag) lines.push("other: yes");
+        if (flags.has("exclusive") || needsExpressExclusiveFlag) lines.push("exclusive: yes");
+        if (flags.has("fix") || needsExpressExclusiveFlag) lines.push("fix: yes");
       });
+
+      if (state.expressMode) {
+        const sourceFlagsByCode = new Map((q.options || [])
+          .filter(item => item?.code && Array.isArray(item?.flags) && item.flags.length)
+          .map(item => [normalizeWhitespace(item.code || ""), new Set(item.flags)]));
+        if (sourceFlagsByCode.size) {
+          const patchedLines = [];
+          lines.forEach((line, index) => {
+            patchedLines.push(line);
+            const match = String(line || "").match(/^\s*(\d{1,4})\.\s+/u);
+            if (!match) return;
+            const flags = sourceFlagsByCode.get(normalizeWhitespace(match[1]));
+            if (!flags) return;
+            const lookahead = lines.slice(index + 1, index + 4).map(item => normalizeWhitespace(item));
+            if (flags.has("other") && !lookahead.some(item => /^other:\s*yes\b/iu.test(item))) patchedLines.push("other: yes");
+            if (flags.has("exclusive") && !lookahead.some(item => /^exclusive:\s*yes\b/iu.test(item))) patchedLines.push("exclusive: yes");
+            if (flags.has("fix") && !lookahead.some(item => /^fix:\s*yes\b/iu.test(item))) patchedLines.push("fix: yes");
+          });
+          lines.splice(0, lines.length, ...patchedLines);
+        }
+      }
 
       if (!lines.length && (q.type === "Grid" || q.type === "Matrix") && Array.isArray(q.columns) && q.columns.length) {
         q.columns.forEach((column, index) => {
@@ -9276,6 +9436,7 @@ final: ${escapeHtml(draft.final_code || "")}
       clean = clean
         .replace(/\s*(?:[-–—,;:]|\(|\[)?\s*(?:заверш\p{L}*|законч\p{L}*)\s+(?:(?:опрос|анкет\p{L}*)\s+)?(?:со\s+статусом\s*)?[«"“„']?\s*(?:complete|комплит\p{L}*)?[»"”']?\s*[\])]?$/iu, "")
         .replace(/\s*(?:[-–—,;:]?\s*)?[\(\[][^)\]]*(?:complete|комплит\p{L}*|законч\p{L}*|заверш\p{L}*)[^)\]]*[\)\]]\s*$/iu, "")
+        .replace(/\s*(?:[-–—,;:\/]|\(|\[)?\s*(?:открыт(?:ый|ая|ое|ые)?(?:\s+(?:ответ|вопрос))?|exclusive|эксклюзив(?:н(?:ый|ая|ое|ые))?|исключающ(?:ий|ая|ее|ие|их|его|ему|им)?(?:\s+вариант\p{L}*)?)\s*[\])]?$/iu, "")
         .trim();
       const suffixWords = [
         "доп разрез",
