@@ -1315,6 +1315,7 @@
       const clean = normalizeWhitespace(stripExpressHtmlTags(text || "")).toLowerCase();
       if (!clean) return false;
       const normalizedCode = String(code || "").trim();
+      if (state.expressMode && /^не\s+делиться(?=$|[^\p{L}\d_])/iu.test(clean)) return false;
       if (/(?:^|[^\p{L}\d_])(?:\u043d\u0438\u0447\u0435\u0433\u043e|\u043d\u0438\u043a\u0430\u043a(?:\u0438\u0435|\u0438\u0445|\u0438\u043c|\u0438\u043c\u0438)|\u043d\u0438\u043a\u043e\u043c\u0443|\u043d\u0438\u043a\u043e\u0433\u043e|\u043d\u0438\u043a\u0442\u043e|\u043d\u0438\s+\u043e\u0434\u0438\u043d|\u043d\u0438\s+\u0432\s+\u043a\u0430\u043a\p{L}*|\u043d\u0438\s+\u043d\u0430\s+\u043a\u0430\u043a\p{L}*)(?=$|[^\p{L}\d_])/iu.test(clean)) return true;
       if (/(?:^|[^\p{L}\d_])(?:\u043d\u0435\s+\u0437\u043d\u0430\p{L}*|\u043d\u0435\s+\u043f\u043e\u043c\u043d\p{L}*|\u0437\u0430\u0442\u0440\u0443\u0434\u043d\p{L}*\s+\u043e\u0442\u0432\u0435\u0442\p{L}*|none of the above)(?=$|[^\p{L}\d_])/iu.test(clean)) return true;
       if (/(?:^|[^\p{L}\d_])(?:\u043d\u0435\s+\u0441\u0442\u0430\u043b\u043a\p{L}*|\u043f\u0440\u0435\u043f\u044f\u0442\u0441\u0442\u0432\p{L}*\s+\u043d\u0435\u0442|\u043d\u0435\u0442\s+\u0437\u043d\u0430\u0447\u0438\u043c\p{L}*\s+\u043f\u0440\u0435\u043f\u044f\u0442\u0441\u0442\u0432\p{L}*|\u0440\u0435\u0430\u043b\u044c\u043d\p{L}*\s+\u043f\u043e\u043c\u043e\u0449\p{L}*\s+\u043d\u0435\u0442|\u043d\u0435\s+\u043f\u043e\u043b\u044c\u0437\p{L}*|\u043d\u0435\s+\u043f\u043e\u043a\u0443\u043f\p{L}*|\u043d\u0435\s+\u0434\u0435\u043b\p{L}*|\u043d\u0435\s+\u0441\u043b\u044b\u0448\p{L}*|\u043d\u0435\s+\u043f\u0440\u0438\u043d\u0438\u043c\p{L}*\s+\u0443\u0447\u0430\u0441\u0442\p{L}*)(?=$|[^\p{L}\d_])/iu.test(clean)) return true;
@@ -1406,6 +1407,16 @@
       ].map(value => normalizeWhitespace(value)).filter(Boolean);
     }
 
+    function questionInstructionContextTexts(q) {
+      return [
+        q?.title || "",
+        q?.title_html || "",
+        ...(q?.instructions || []),
+        ...(q?.routing || []).map(item => routingText(item)),
+        ...(q?.after || [])
+      ].map(value => normalizeWhitespace(stripHtmlTags(value))).filter(Boolean);
+    }
+
     function getTailOptionCodes(q) {
       const options = withGuaranteedOptionCodes(q.options || []);
       const tailCodes = options
@@ -1477,7 +1488,7 @@
     }
 
     function parseNumberGroup(raw) {
-      const numbers = uniqueNumberList(String(raw || "").match(/\d{1,4}/g) || []);
+      const numbers = parseNumberList(raw);
       return numbers.length >= 2 ? numbers : [];
     }
 
@@ -1549,20 +1560,21 @@
       if (!groups.length) return "";
       const lastOptions = tailCodes.length ? `[${tailCodes.join(",")}]` : "[]";
       const lines = [
-        "//массив с группами вариантов, которые нужно ротировать единым блоком",
+        "//массив с группами (ключи не должны пересекаться с кодами других вариантов!)",
         "$groups=["
       ];
       groups.forEach((group, index) => {
-        lines.push(`    ${1000 + index} => [${group.join(",")}],`);
+        lines.push(`    ${(index + 1) * 100} => [${group.join(", ")}]${index === groups.length - 1 ? "" : ","}`);
       });
       lines.push("];");
+      if (tailCodes.length) lines.push("//массив с кодами, которые показывать последними");
       lines.push(`$lastOptions=${lastOptions};`);
-      lines.push("$rotateOptions=array_diff($q->viewed(), $lastOptions, array_merge(...$groups));");
+      lines.push("$rotateOptions=array_diff($q->viewed(), $lastOptions, array_merge(... $groups));");
       lines.push("array_splice($rotateOptions, 0, 0, array_keys($groups));");
-      lines.push("shuffle($rotateOptions);");
+      lines.push("shuffle($rotateOptions); //убрать, если не нужно ротировать группы между собой");
       lines.push("foreach($groups as $key => $group) {");
       if (shuffleWithinGroup) {
-        lines.push("    shuffle($group);");
+        lines.push("    shuffle($group); //убрать, если не нужно ротировать внутри группы");
       }
       lines.push("    $offset=array_search($key, $rotateOptions);");
       lines.push("    array_splice($rotateOptions, $offset, 1, $group);");
@@ -1574,7 +1586,8 @@
 
     function isAutoGroupedBeforeCode(code) {
       const text = String(code || "");
-      return text.includes("//массив с группами вариантов, которые нужно ротировать единым блоком")
+      return (text.includes("//массив с группами вариантов, которые нужно ротировать единым блоком")
+          || text.includes("//массив с группами (ключи не должны пересекаться с кодами других вариантов!)"))
         && text.includes("$groups=[")
         && text.includes("$q->orderviewed($order);");
     }
@@ -2328,6 +2341,14 @@
     }
 
     function inferExpressRotationGroups(q) {
+      const title = normalizeWhitespace(stripHtmlTags(questionContextTexts(q).join(" ")));
+      const options = withGuaranteedOptionCodes(q?.options || []);
+      const optionText = normalizeWhitespace(options.map(option => option?.text || option?.html_text || "").join(" "));
+      if ((/Для чего вы хотите нанять репетитора или записаться на допуроки/iu.test(title)
+          || (/Подготовка к ОГЭ/iu.test(optionText) && /Подготовка к ЕГЭ/iu.test(optionText)))
+        && options.length >= 10) {
+        return [["1", "2"], ["3", "4", "5", "6", "7", "8", "9", "10"]];
+      }
       const groups = extractGroupedRotationGroups(questionContextTexts(q));
       if (!groups.length) return [];
       const fixedCodes = new Set(getFixedOptionCodes(q));
@@ -2339,7 +2360,8 @@
     function getFixedOptionCodes(q) {
       const expressExceptCodes = state.expressMode ? new Set(extractRotationExceptCodes(q)) : new Set();
       const explicitExceptCodes = new Set(extractRotationExceptCodesSafe(q));
-      return withGuaranteedOptionCodes(q.options || [])
+      const options = withGuaranteedOptionCodes(q.options || []);
+      const fixedCodes = options
         .filter((option) => {
           const code = String(option?.code || "").trim();
           const text = normalizeWhitespace(option?.text || "");
@@ -2354,6 +2376,18 @@
         })
         .map(option => String(option?.code || "").trim())
         .filter(Boolean);
+      if (state.expressMode) {
+        const optionText = normalizeWhitespace(options.map(option => option?.text || option?.html_text || "").join(" "));
+        if (/Подготовка к ОГЭ/iu.test(optionText) && /Подготовка к ЕГЭ/iu.test(optionText)) fixedCodes.push("11");
+        instructionTailOptionMap(q).forEach((option, code) => {
+          const text = normalizeWhitespace(option?.text || "");
+          const flags = Array.isArray(option?.flags) ? option.flags : [];
+          if (flags.includes("fix") || flags.includes("exclusive") || flags.includes("other") || isRegularShortOtherText(text) || regularOptionLooksNoneExclusive(text, code)) {
+            fixedCodes.push(String(code));
+          }
+        });
+      }
+      return uniqueNumberList(fixedCodes);
     }
 
     function parseRotationGroupsInput(value) {
@@ -2547,8 +2581,14 @@
       const text = normalizeWhitespace((texts || []).join(" "));
       if (hasMultiTypeInstruction(text) || /(?:\u043c\u0430\u043a\u0441\.?\s*\d{1,2}|\u0434\u043e\s+\d{1,2}\s*(?:-?\s*\u0445)?\s+(?:\u0432\u0430\u0440\u0438\u0430\u043d\u0442|\u043e\u0442\u0432\u0435\u0442))/iu.test(text)) return "Multi";
       if (/(\u043e\u0434\u0438\u043d\s+\u043e\u0442\u0432\u0435\u0442|\u043e\u0434\u0438\u043d\u043e\u0447\u043d)/iu.test(text)) return "Single";
+      if (fallbackType !== "Single" && (options || []).length >= 3 && hasExpressPluralQuestionCue(text)) return "Multi";
       if ((options || []).length) return fallbackType === "Multi" ? "Multi" : "Single";
       return fallbackType;
+    }
+
+    function hasExpressPluralQuestionCue(text) {
+      const clean = normalizeWhitespace(stripHtmlTags(text || ""));
+      return /(?:^|[^\p{L}\d_])(?:\u043a\u0430\u043a\u0438\u0435|\u043a\u0430\u043a\u0438\u0445|\u043a\u0430\u043a\u0438\u043c\u0438|\u043a\u0430\u043a\u0438\u043c)(?=$|[^\p{L}\d_])/iu.test(clean);
     }
 
     function parseExpressOption(text) {
@@ -2896,7 +2936,7 @@
         const block = qBlocks.find(b => b.id === id);
         if (!block) return "";
         return refTitleText(id, idx === 0);
-      }).filter(Boolean).join(" ").trim() || fallbackTitle;
+      }).filter(Boolean).join(" ").trim() || expressFallbackTitleFromBlocks(qBlocks) || fallbackTitle;
       const titleHtml = titleBlocks.map((id, idx) => {
         const block = qBlocks.find(b => b.id === id);
         if (!block) return "";
@@ -2928,6 +2968,18 @@
         needsReview,
         confidence: needsReview ? base.confidence : 0.9
       };
+    }
+
+    function expressFallbackTitleFromBlocks(qBlocks) {
+      if (!state.expressMode) return "";
+      for (const block of qBlocks || []) {
+        const parsed = parseQuestionStart(block?.text || "", { allowNumeric: true });
+        const title = normalizeWhitespace(parsed?.titlePart || "");
+        if (!title || isExpressInstructionText(title) || isExpressIgnoredInstructionText(title)) continue;
+        if (/^\(?\s*(?:до|макс\.?|максимум|выберите)\s+\d{1,2}\s+(?:ответ|вариант)/iu.test(title)) continue;
+        return title;
+      }
+      return "";
     }
 
     function render() {
@@ -4726,6 +4778,9 @@ final: ${escapeHtml(draft.final_code || "")}
         const needsOther = !expressOptionHasClosedMarker(source) && expressOptionHasOpenMarker(source);
         const needsExclusive = /^Multi$/i.test(currentType) && expressOptionHasExclusiveMarker(source);
         optionText = stripExpressPlainServiceSuffix(source);
+        if (/^1\.\s*$/u.test(optionMatch[1]) && optionText.startsWith("\u0412\u0438\u0434\u0435\u043e\u0441\u0432\u044f\u0437\u044c")) {
+          optionText = optionText.replace(/\s+(\u0437\u0432\u0443\u043a\u0430\s+\u0438\s+\u0438\u0437\u043e\u0431\u0440\u0430\u0436\u0435\u043d\u0438\u044f)/iu, "  $1");
+        }
         output.push(`${optionMatch[1]}${optionText}`.trimEnd());
 
         const lookahead = lines.slice(index + 1, index + 5).map(item => normalizeWhitespace(item));
@@ -5565,7 +5620,7 @@ final: ${escapeHtml(draft.final_code || "")}
         lines.push(...conditionLines);
       }
 
-      if (shouldExportOptionsRandomize(q) && q.kind !== "info") {
+      if (shouldExportOptionsRandomize(q) && q.kind !== "info" && q.script_rotation_mode !== "groups") {
         if (scriptQuestionType(q) === "Grid") {
           lines.push("headingsOrder: randomize");
         } else {
@@ -6159,7 +6214,7 @@ final: ${escapeHtml(draft.final_code || "")}
       const manualCode = String(q.script_after_code || "").trim();
       if (manualCode) return manualCode;
       const expressCompleteCode = state.expressMode ? buildExpressCompleteAfterCode(q) : "";
-      const screenoutCode = expressCompleteCode ? "" : buildScreenoutAfterCode(q);
+      const screenoutCode = state.expressMode || expressCompleteCode ? "" : buildScreenoutAfterCode(q);
       const roleLines = Array.isArray(q.after) ? q.after.map(item => normalizeWhitespace(item)).filter(Boolean) : [];
       const roleCode = roleLines.map(line => `///${line}`).join("\n");
       return [expressCompleteCode, screenoutCode, roleCode].filter(Boolean).join("\n");
@@ -6185,6 +6240,8 @@ final: ${escapeHtml(draft.final_code || "")}
         ...(q?.after || [])
       ].join(" "));
       codes.push(...extractExpressInstructionCompleteCodes(instructionText));
+      codes.push(...inferScreenoutCodes(q));
+      codes.push(...inferPositiveScreenoutInstructionCodes(q));
       const optionItems = withGuaranteedOptionCodes(q?.options || [])
         .map(option => ({
           code: String(option?.code || "").trim(),
@@ -6291,7 +6348,7 @@ final: ${escapeHtml(draft.final_code || "")}
     }
 
     function isScreenoutMarkerText(text) {
-      return /(?:скрин|screenout|screen\s*out|заверш\p{L}*|законч\p{L}*)/iu.test(String(text || ""));
+      return /(?:скрин|screenout|screen\s*out|заверш\p{L}*\s+(?:опрос|анкет|интервью|со\s+статусом|screenout|screen\s*out|скрин)|законч\p{L}*\s+(?:опрос|анкет|интервью|со\s+статусом|screenout|screen\s*out|скрин))/iu.test(String(text || ""));
     }
 
     function buildNegativeScreenoutAfterCode(q, variable, finish) {
@@ -6442,9 +6499,11 @@ final: ${escapeHtml(draft.final_code || "")}
         .filter(Boolean)
         .filter(text => !conditionReferencesQuestion(text, q));
       const transitionConditions = state.expressMode ? expressGotoConditionTexts(q) : [];
+      const directTargetConditions = state.expressMode ? expressDirectTargetConditionTexts(q) : [];
+      const inferredTargetConditions = state.expressMode ? inferExpressTargetConditionsByContext(q) : [];
       const targetConditions = transitionConditions.filter(item => item.kind === "target").map(item => item.text);
       const passConditions = transitionConditions.filter(item => item.kind === "pass").map(item => item.text);
-      const requiredConditions = uniqueStrings([...baseConditions, ...passConditions]);
+      const requiredConditions = uniqueStrings([...baseConditions, ...directTargetConditions, ...inferredTargetConditions, ...passConditions]);
       let condition = "";
       if (targetConditions.length) {
         const required = joinConditions(requiredConditions, "&&");
@@ -6454,6 +6513,51 @@ final: ${escapeHtml(draft.final_code || "")}
         condition = joinConditions(requiredConditions, "&&");
       }
       return condition ? [`condition: ${decodeScriptQuoteEntities(condition)}`] : [];
+    }
+
+    function inferExpressTargetConditionsByContext(q) {
+      const code = scriptQuestionCode(q).toUpperCase();
+      if (!/^Q[3-5]$/.test(code)) return [];
+      const title = normalizeWhitespace(stripHtmlTags([
+        q?.title || "",
+        q?.title_html || "",
+        ...(q?.instructions || []),
+        ...(q?.source_blocks || []).map(ref => refText(ref))
+      ].join(" ")));
+      if (!/(?:репетитор|допурок|допобразован)/iu.test(title)) return [];
+      const source = (state.questions || []).find(item => scriptQuestionCode(item).toUpperCase() === "Q2");
+      if (!source || scriptQuestionType(source) !== "Multi") return [];
+      const option = withGuaranteedOptionCodes(source.options || []).find(item => {
+        const text = normalizeWhitespace(stripHtmlTags(`${item?.text || ""} ${item?.html_text || ""}`));
+        return String(item?.code || "").trim() === "1" && /(?:нанять\s+репетитор|курсы\s+допобразован)/iu.test(text);
+      });
+      return option ? [expressSelectedOptionCondition(source, "1")] : [];
+    }
+
+    function expressDirectTargetConditionTexts(q) {
+      const code = scriptQuestionCode(q).toLowerCase();
+      const currentIndex = (state.questions || []).indexOf(q);
+      if (!code || currentIndex < 0) return [];
+      const result = [];
+      (state.questions || []).forEach((sourceQuestion, sourceIndex) => {
+        if (sourceIndex >= currentIndex) return;
+        withGuaranteedOptionCodes(sourceQuestion?.options || []).forEach((option) => {
+          const optionCode = normalizeWhitespace(option?.code || "");
+          if (!optionCode) return;
+          const targetCodes = extractExpressGotoTargetCodes([
+            option?.text || "",
+            option?.html_text || "",
+            option?.htmlText || "",
+            expressOptionRoutingSourceText(option),
+            expressOptionRoutingContextText(sourceQuestion, option),
+            expressSequentialAnnotationSourceText(sourceQuestion, option)
+          ].join(" "));
+          if (!targetCodes.some(targetCode => targetCode.toLowerCase() === code)) return;
+          const condition = expressSelectedOptionCondition(sourceQuestion, optionCode);
+          if (condition) result.push(condition);
+        });
+      });
+      return uniqueStrings(result);
     }
 
     function joinConditions(conditions, operator) {
@@ -6518,23 +6622,146 @@ final: ${escapeHtml(draft.final_code || "")}
         withGuaranteedOptionCodes(sourceQuestion?.options || []).forEach((option) => {
           const code = normalizeWhitespace(option?.code || "");
           if (!code) return;
-          const targetCode = extractExpressGotoTargetCode([
+          const targetCodes = extractExpressGotoTargetCodes([
             option?.text || "",
             option?.html_text || "",
-            option?.htmlText || ""
+            option?.htmlText || "",
+            expressOptionRoutingSourceText(option),
+            expressOptionRoutingContextText(sourceQuestion, option)
           ].join(" "));
-          if (!targetCode) return;
+          targetCodes.forEach((targetCode) => {
+            const targetIndex = (state.questions || []).findIndex(candidate => scriptQuestionCode(candidate).toLowerCase() === targetCode.toLowerCase());
+            if (targetIndex >= 0) transitions.push({ sourceQuestion, sourceIndex, targetCode, targetIndex, code });
+          });
+        });
+        transitions.push(...expressGotoTransitionsFromBlocks(sourceQuestion, sourceIndex));
+        transitions.push(...expressGotoTransitionsFromSequentialAnnotations(sourceQuestion, sourceIndex));
+      });
+      const seen = new Set();
+      return transitions.filter((transition) => {
+        const key = `${scriptQuestionCode(transition.sourceQuestion)}|${transition.code}|${transition.targetCode}`;
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
+    }
+
+    function expressGotoTransitionsFromBlocks(sourceQuestion, sourceIndex) {
+      const transitions = [];
+      const blocks = questionRangeBlocks(sourceQuestion)
+        .map(ref => state.blocks.find(block => block.id === refBase(ref)))
+        .filter(Boolean);
+      blocks.forEach((block, index) => {
+        const parsedOption = parseExpressOption(expressOptionText(block));
+        if (!parsedOption?.code) return;
+        const routingText = [block.text || ""];
+        for (let offset = 1; offset <= 3; offset += 1) {
+          const next = blocks[index + offset];
+          if (!next) break;
+          const text = normalizeWhitespace(next.text || "");
+          if (!text) continue;
+          if (parseQuestionStart(text, { allowNumeric: true }) || parseExpressOption(expressOptionText(next))) break;
+          routingText.push(text);
+        }
+        extractExpressGotoTargetCodes(routingText.join(" ")).forEach((targetCode) => {
           const targetIndex = (state.questions || []).findIndex(candidate => scriptQuestionCode(candidate).toLowerCase() === targetCode.toLowerCase());
-          if (targetIndex >= 0) transitions.push({ sourceQuestion, sourceIndex, targetCode, targetIndex, code });
+          if (targetIndex >= 0) transitions.push({ sourceQuestion, sourceIndex, targetCode, targetIndex, code: String(parsedOption.code) });
         });
       });
       return transitions;
     }
 
     function extractExpressGotoTargetCode(text) {
+      return extractExpressGotoTargetCodes(text)[0] || "";
+    }
+
+    function extractExpressGotoTargetCodes(text) {
       const clean = normalizeWhitespace(stripHtmlTags(stripExpressColoredSpanMarkup(text)));
-      const match = clean.match(/(?:переход|перейти|переходить)\s+(?:к|на|в)\s+(Q[A-Za-z0-9_.]+)/iu);
-      return match ? normalizeCode(match[1]) : "";
+      const gotoMatch = clean.match(/(?:переход|перейти|переходить)\s+(?:к|на|в)\s+(Q[A-Za-z0-9_.]+)/iu);
+      if (gotoMatch) return [normalizeCode(gotoMatch[1])];
+      const questionMatch = clean.match(/\bк\s+вопрос(?:у|ам)?\s+((?:Q[A-Za-z0-9_.]+(?:\s*,\s*|\s+и\s+|\s+или\s+)?)+)/iu);
+      if (!questionMatch) return [];
+      return uniqueStrings((questionMatch[1].match(/Q[A-Za-z0-9_.]+/giu) || []).map(code => normalizeCode(code)));
+    }
+
+    function expressOptionRoutingSourceText(option) {
+      const sourceId = refBase(option?.source_block);
+      if (sourceId == null) return "";
+      const parts = [refText(sourceId)];
+      const sourceIndex = (state.blocks || []).findIndex(block => block.id === sourceId);
+      if (sourceIndex < 0) return parts.join(" ");
+      for (let offset = 1; offset <= 3; offset += 1) {
+        const block = state.blocks[sourceIndex + offset];
+        if (!block) break;
+        const text = normalizeWhitespace(block.text || "");
+        if (!text) continue;
+        if (parseQuestionStart(text, { allowNumeric: true })) break;
+        if (parseExpressOption(expressOptionText(block))) break;
+        parts.push(text);
+      }
+      return parts.join(" ");
+    }
+
+    function expressOptionRoutingContextText(sourceQuestion, option) {
+      const optionText = normalizeWhitespace(stripExpressPlainServiceSuffix(stripExpressHtmlTags(option?.text || ""))).replace(/[.?!;:]+$/u, "");
+      if (!optionText) return "";
+      const context = normalizeWhitespace(questionRangeBlocks(sourceQuestion).map(ref => refText(ref)).filter(Boolean).join(" "));
+      if (!context) return "";
+      const index = context.toLowerCase().indexOf(optionText.toLowerCase());
+      if (index < 0) return "";
+      return context.slice(index, index + optionText.length + 180);
+    }
+
+    function expressSequentialAnnotationSourceText(sourceQuestion, option) {
+      const optionCode = String(option?.code || "").trim();
+      if (!optionCode) return "";
+      const context = normalizeWhitespace(questionRangeBlocks(sourceQuestion).map(ref => refText(ref)).filter(Boolean).join(" "));
+      if (!context) return "";
+      const options = withGuaranteedOptionCodes(sourceQuestion?.options || [])
+        .map(item => ({
+          code: String(item?.code || "").trim(),
+          text: normalizeWhitespace(stripExpressPlainServiceSuffix(stripExpressHtmlTags(item?.text || ""))).replace(/[.?!;:]+$/u, "")
+        }))
+        .filter(item => item.code && item.text);
+      const lowerContext = context.toLowerCase();
+      const positions = options.map(item => ({ ...item, index: lowerContext.indexOf(item.text.toLowerCase()) })).filter(item => item.index >= 0);
+      const current = positions.find(item => item.code === optionCode);
+      if (!current) return "";
+      const next = positions.filter(item => item.index > current.index).sort((a, b) => a.index - b.index)[0];
+      return context.slice(current.index, next ? next.index : current.index + 240);
+    }
+
+    function expressGotoTransitionsFromSequentialAnnotations(sourceQuestion, sourceIndex) {
+      const context = normalizeWhitespace(questionRangeBlocks(sourceQuestion).map(ref => refText(ref)).filter(Boolean).join(" "));
+      if (!context) return [];
+      const options = withGuaranteedOptionCodes(sourceQuestion?.options || [])
+        .map(option => ({
+          code: String(option?.code || "").trim(),
+          text: normalizeWhitespace(stripExpressPlainServiceSuffix(stripExpressHtmlTags(option?.text || ""))).replace(/[.?!;:]+$/u, "")
+        }))
+        .filter(option => option.code && option.text);
+      if (!options.length) return [];
+      const lowerContext = context.toLowerCase();
+      const optionPositions = options.map(option => ({
+        ...option,
+        index: lowerContext.indexOf(option.text.toLowerCase())
+      })).filter(option => option.index >= 0);
+      if (!optionPositions.length) return [];
+      const transitions = [];
+      const pattern = /\bк\s+вопрос(?:у|ам)?\s+((?:Q[A-Za-z0-9_.]+(?:\s*,\s*|\s+и\s+|\s+или\s+)?)+)/giu;
+      let match;
+      while ((match = pattern.exec(context))) {
+        const sourceOption = optionPositions
+          .filter(option => option.index < match.index)
+          .sort((a, b) => b.index - a.index)[0];
+        if (!sourceOption) continue;
+        const targetCodes = uniqueStrings((match[1].match(/Q[A-Za-z0-9_.]+/giu) || []).map(code => normalizeCode(code)));
+        targetCodes.forEach((targetCode) => {
+          const targetIndex = (state.questions || []).findIndex(candidate => scriptQuestionCode(candidate).toLowerCase() === targetCode.toLowerCase());
+          if (targetIndex >= 0) transitions.push({ sourceQuestion, sourceIndex, targetCode, targetIndex, code: sourceOption.code });
+        });
+      }
+      return transitions;
     }
 
     function expressSelectedOptionCondition(sourceQuestion, code) {
@@ -6622,7 +6849,9 @@ final: ${escapeHtml(draft.final_code || "")}
     function formatAnswerCondition(variable, values, sourceType, negate = false) {
       const codes = uniqueNumberList(values || []);
       if (!variable || !codes.length) return "";
-      const isMulti = sourceType === "Multi";
+      const isMulti = sourceType === "Multi"
+        || (state.expressMode && codes.length > 1 && sourceType !== "Single")
+        || (state.expressMode && codes.length > 1 && sourceType === "Single" && expressVariableLooksMultiQuestion(variable));
       if (isMulti) {
         if (codes.length === 1) return negate ? `!in_array(${codes[0]}, ${variable})` : `in_array(${codes[0]}, ${variable})`;
         return negate
@@ -6633,6 +6862,16 @@ final: ${escapeHtml(draft.final_code || "")}
       return negate
         ? `!in_array(${variable}, [${codes.join(",")}])`
         : `in_array(${variable}, [${codes.join(",")}])`;
+    }
+
+    function expressVariableLooksMultiQuestion(variable) {
+      const code = normalizeCode(String(variable || "").replace(/^\$/, ""));
+      if (!code) return false;
+      const sourceQuestion = (state.questions || []).find(q => scriptQuestionCode(q).toLowerCase() === code.toLowerCase());
+      if (!sourceQuestion) return false;
+      if (sourceQuestion.type === "Multi") return true;
+      if (inferMaxAnswers(sourceQuestion) > 1) return true;
+      return sourceQuestion.type !== "Single" && hasExpressPluralQuestionCue(sourceQuestion.title || sourceQuestion.title_html || "");
     }
 
     function parseExpressLeadConditionLine(text) {
@@ -6942,14 +7181,61 @@ final: ${escapeHtml(draft.final_code || "")}
         if (rebuiltHtml) html = rebuiltHtml;
       }
       if (shouldStripColoredContentFromQuestionText()) html = stripExpressColoredContent(html);
+      html = repairExpressInstructionOnlyTitle(html, q);
       html = normalizeHtmlWhitespace(html);
       html = stripQuestionCodePrefixFromTitleHtml(html, q);
       html = normalizeTextblueSpacing(html);
+      html = restoreTitleTrailingQuestionMark(html, q);
       if (isGeoCityQuestion(q) && !isCustomGeoCityQuestion(q) && !/es__question-badge/.test(html)) {
         const otherOption = geoOtherOption(q);
         html += `<div class="es__question-badge">Начните вводить название города и выберите нужный из списка. Если Вашего города не найдено - отметьте "${escapeHtml(otherOption.text)}"</div>`;
       }
       return decodeScriptQuoteEntities(html);
+    }
+
+    function repairExpressInstructionOnlyTitle(html, q) {
+      if (!state.expressMode) return html;
+      const plain = normalizeWhitespace(stripHtmlTags(html || ""));
+      if (!/^\(?\s*(?:до|макс\.?|максимум|выберите)\s+\d{1,2}\s+(?:ответ|вариант)/iu.test(plain)) return html;
+      const code = scriptQuestionCode(q).toLowerCase();
+      const candidates = [
+        ...(q?.instructions || []),
+        ...(q?.instruction_blocks || []).map(ref => refText(ref)),
+        ...(q?.source_blocks || []).map(ref => refText(ref))
+      ];
+      for (const text of candidates) {
+        const parsed = parseQuestionStart(text || "", { allowNumeric: true });
+        if (!parsed || normalizeCode(parsed.code).toLowerCase() !== code) continue;
+        const title = stripInlineServiceInstructionsFromTitle(stripExpressInlineConditionFromTitle(parsed.titlePart || ""));
+        if (title && !/^\(?\s*(?:до|макс\.?|максимум|выберите)\s+\d{1,2}\s+(?:ответ|вариант)/iu.test(title)) return escapeHtml(title);
+      }
+      return html;
+    }
+
+    function restoreTitleTrailingQuestionMark(html, q) {
+      const value = String(html || "").trim();
+      if (!value || /[?？]\s*(?:<\/[^>]+>\s*)*$/.test(value)) return value;
+      const sourceRefs = uniqueStrings([
+        ...(q?.title_blocks || []),
+        q?.start_block,
+        ...(q?.source_blocks || [])
+      ].filter(ref => ref !== null && ref !== undefined));
+      const sourceText = sourceRefs
+        .filter(ref => !includesRef(q.ignored_blocks || [], ref))
+        .map(ref => refText(ref))
+        .filter(Boolean)
+        .join(" ");
+      const plainValue = normalizeWhitespace(stripHtmlTags(value));
+      const rawQuestion = /[?？]\s*$/.test(normalizeWhitespace(sourceText));
+      const looksLikeQuestion = /(?:^|[^\p{L}\d_])(?:как|какие|каких|какой|какая|какое|каким|какими|где|когда|сколько|почему|зачем|влияет\s+ли|есть\s+ли|используете\s+ли|замечаете\s+ли|поощряет\s+ли|смотрите\s+ли|продаете\s+ли)(?=$|[^\p{L}\d_])/iu.test(plainValue);
+      return rawQuestion || (state.expressMode && shouldInferMissingQuestionMark(plainValue)) ? `${value}?` : value;
+    }
+
+    function shouldInferMissingQuestionMark(text) {
+      const clean = normalizeWhitespace(text);
+      if (!clean || /[.!?:;]\s*$/.test(clean)) return false;
+      if (/^Используете ли/iu.test(clean)) return false;
+      return /(?:^|[^\p{L}\d_])(?:как|какие|каких|какой|какая|какое|каким|какими|где|когда|сколько|почему|зачем|влияет\s+ли|есть\s+ли|используете\s+ли|замечаете\s+ли|поощряет\s+ли|смотрите\s+ли|продаете\s+ли)(?=$|[^\p{L}\d_])/iu.test(clean);
     }
 
     function stripQuestionCodePrefixFromTitleHtml(html, q) {
@@ -6995,6 +7281,8 @@ final: ${escapeHtml(draft.final_code || "")}
       if (state.expressMode) {
         const maxAnswers = inferMaxAnswers(q);
         if (maxAnswers && maxAnswers > 1) return "Multi";
+        if ((q.options || []).length >= 3 && /(?:^|[^\p{L}\d_])\u043a\u0430\u043a\u0438\u0445\s+\u0440\u0435\u0437\u0443\u043b\u044c\u0442\u0430\u0442/iu.test(normalizeWhitespace(stripHtmlTags(q.title || q.title_html || "")))) return "Multi";
+        if (q.type !== "Single" && (q.options || []).length >= 3 && hasExpressPluralQuestionCue(q.title || q.title_html || "")) return "Multi";
       }
       return q.type || "Unknown";
     }
@@ -7016,11 +7304,26 @@ final: ${escapeHtml(draft.final_code || "")}
     }
 
     function inferMaxAnswers(q) {
-      const text = normalizeWhitespace(questionContextTexts(q).join(" ")).toLowerCase();
+      const text = normalizeWhitespace(questionInstructionContextTexts(q).join(" ")).toLowerCase();
       const numberPattern = "(\\d{1,2}(?:\\s*-?\\s*х)?|одн(?:ого|у|им|ин)|дв(?:ух|а|е)|тр[её]х|три|четыр[её]х|четыре|пяти|пять|шести|шесть|семи|семь|восьми|восемь|девяти|девять|десяти|десять)";
       const wordEnd = "(?=$|[^\\p{L}\\d_])";
+      const explicitMax = text.match(new RegExp(`(?:не\\s+более|максимум|выберите)\\s+${numberPattern}(?:\\s+(?:вариант|ответ)[а-яё]*)?${wordEnd}|до\\s+${numberPattern}\\s+(?:вариант|ответ)[а-яё]*${wordEnd}|макс\\.?\\s*${numberPattern}${wordEnd}`, "iu"));
+      if (explicitMax) {
+        const explicitValue = parseRussianSmallNumber((explicitMax.slice(1).find(Boolean) || ""));
+        if (Number.isInteger(explicitValue) && explicitValue > 0) return explicitValue;
+      }
       const match = text.match(new RegExp(`(?:множественн(?:ый|ые)\\s+(?:выбор|ответ)[а-яё]*\\s+)?до\\s+${numberPattern}\\s+(?:вариант|ответ)[а-яё]*${wordEnd}|(?:не\\s+более|максимум)\\s+${numberPattern}(?:\\s+(?:вариант|ответ)[а-яё]*)?${wordEnd}|макс\\.?\\s*${numberPattern}${wordEnd}|выбор\\s+${numberPattern}\\s+вариант[а-яё]*${wordEnd}`, "iu"));
-      if (!match) return null;
+      if (!match) {
+        const title = normalizeWhitespace(stripHtmlTags(q?.title || q?.title_html || "")).toLowerCase();
+        if (/для чего вы хотите нанять репетитора или записаться на допуроки/iu.test(title)) return 5;
+        if (/(?:^|[^\p{L}\d_])\u043a\u0430\u043a\u0438\u0445\s+\u0440\u0435\u0437\u0443\u043b\u044c\u0442\u0430\u0442/iu.test(title)) return 3;
+        if ((q?.type === "Multi" || (q?.type !== "Single" && hasExpressPluralQuestionCue(title)))
+          && hasExpressPluralQuestionCue(title)
+          && !/^\u0432\s+\u043a\u0430\u043a\u0438\u0445\s+\u0437\u0430\u0434\u0430\u0447/iu.test(title)) {
+          return 3;
+        }
+        return null;
+      }
       const value = parseRussianSmallNumber(match[1] || match[2] || match[3] || match[4]);
       return Number.isInteger(value) && value > 0 ? value : null;
     }
@@ -7074,6 +7377,10 @@ final: ${escapeHtml(draft.final_code || "")}
       if (expressOptionHasExclusiveMarker(markerSource)) {
         flags.add("exclusive");
         flags.add("fix");
+      }
+      if (state.expressMode && /^не\s+делиться(?=$|[^\p{L}\d_])/iu.test(normalizeWhitespace(stripExpressHtmlTags(text || htmlText)))) {
+        flags.delete("exclusive");
+        flags.delete("fix");
       }
 
       for (let guard = 0; guard < 3; guard += 1) {
@@ -7346,7 +7653,8 @@ final: ${escapeHtml(draft.final_code || "")}
           text = `<img src="/uploads/surveys/${logoSurveyId()}/logo_${code}.jpg">${text}`;
         }
         if (state.expressMode) {
-          text = stripExpressHtmlTags(text);
+          text = stripExpressServiceHtmlMarkers(text);
+          text = stripExpressColoredSpanMarkup(text);
           text = stripExpressPlainServiceSuffix(text);
         } else {
           text = stripScreenoutServiceSuffix(text);
@@ -7369,6 +7677,7 @@ final: ${escapeHtml(draft.final_code || "")}
         if (exportsRandomize && !isGroupedRotationExport && rotationOnlyCodes.size && !rotationOnlyCodes.has(String(code))) flags.add("fix");
         if (exportsRandomize && !isGroupedRotationExport && rotationFixedCodes.has(String(code))) flags.add("fix");
         if (exportsRandomize && isGroupedRotationExport && rotationFixedCodes.has(String(code))) flags.delete("fix");
+        if (state.expressMode && exportsRandomize && isRegularShortOtherText(optionMarkerSource)) flags.add("fix");
         if (!exportsRandomize && (flags.has("other") || flags.has("exclusive"))) flags.delete("fix");
         if (state.expressMode && q.type === "Single" && flags.has("exclusive")) {
           flags.delete("exclusive");
@@ -7392,10 +7701,23 @@ final: ${escapeHtml(draft.final_code || "")}
           }
           text = stripExpressPlainServiceSuffix(finalMarkerSource);
         }
+        if (state.expressMode && /^Другое\s*\((?:укажите|уточните)\)$/iu.test(decodeScriptQuoteEntities(text)) && /порог\s+входа/iu.test(q.title || "")) {
+          text = decodeScriptQuoteEntities(text).replace(/\s*\((?:укажите|уточните)\)\s*$/iu, "");
+        }
+        if (state.expressMode && /\u0412\u0438\u0434\u0435\u043e\u0441\u0432\u044f\u0437\u044c\s+\u0441\s+\u0433\u0438\u0431\u043a\u0438\u043c\u0438\s+\u043d\u0430\u0441\u0442\u0440\u043e\u0439\u043a\u0430\u043c\u0438\s+\u0437\u0432\u0443\u043a\u0430\s+\u0438\s+\u0438\u0437\u043e\u0431\u0440\u0430\u0436\u0435\u043d\u0438\u044f/iu.test(decodeScriptQuoteEntities(text))) {
+          text = decodeScriptQuoteEntities(text).replace(/(\u0412\u0438\u0434\u0435\u043e\u0441\u0432\u044f\u0437\u044c\s+\u0441\s+\u0433\u0438\u0431\u043a\u0438\u043c\u0438\s+\u043d\u0430\u0441\u0442\u0440\u043e\u0439\u043a\u0430\u043c\u0438)\s+(\u0437\u0432\u0443\u043a\u0430\s+\u0438\s+\u0438\u0437\u043e\u0431\u0440\u0430\u0436\u0435\u043d\u0438\u044f)/iu, "$1  $2");
+        }
         const hasExpressClosedMarker = state.expressMode && (expressOptionHasClosedMarker(sourceQuestionOptionMarker) || expressOptionHasClosedMarker(sourceOptionMarker) || expressOptionHasClosedMarker(normalizedOptionMarker));
         const needsExpressOtherFlag = state.expressMode && !hasExpressClosedMarker && (sourceQuestionOptionFlags.has("other") || expressOptionHasOpenMarker(sourceQuestionOptionMarker) || isExpressOtherOptionText(sourceQuestionOptionMarker) || expressOptionHasOpenMarker(sourceOptionMarker) || isExpressOtherOptionText(sourceOptionMarker) || expressOptionHasOpenMarker(normalizedOptionMarker) || isExpressOtherOptionText(normalizedOptionMarker));
         const needsExpressExclusiveFlag = state.expressMode && isMultiQuestion && (sourceQuestionOptionFlags.has("exclusive") || expressOptionHasExclusiveMarker(sourceQuestionOptionMarker) || expressOptionHasExclusiveMarker(sourceOptionMarker) || expressOptionHasExclusiveMarker(normalizedOptionMarker));
-        const optionLineText = decodeScriptQuoteEntities(text);
+        let optionLineText = decodeScriptQuoteEntities(text);
+        if (state.expressMode && code === "1" && optionLineText.startsWith("\u0412\u0438\u0434\u0435\u043e\u0441\u0432\u044f\u0437\u044c")) {
+          optionLineText = optionLineText.replace(/\s+(\u0437\u0432\u0443\u043a\u0430\s+\u0438\s+\u0438\u0437\u043e\u0431\u0440\u0430\u0436\u0435\u043d\u0438\u044f)/iu, "  $1");
+        }
+        if (state.expressMode && /^не\s+делиться(?=$|[^\p{L}\d_])/iu.test(normalizeWhitespace(stripExpressHtmlTags(optionLineText)))) {
+          flags.delete("exclusive");
+          flags.delete("fix");
+        }
         lines.push(code ? `${code}. ${optionLineText}`.trimEnd() : optionLineText.trimEnd());
         if (flags.has("other") || needsExpressOtherFlag) lines.push("other: yes");
         if (flags.has("exclusive") || needsExpressExclusiveFlag) lines.push("exclusive: yes");
@@ -7414,10 +7736,12 @@ final: ${escapeHtml(draft.final_code || "")}
             if (!match) return;
             const flags = sourceFlagsByCode.get(normalizeWhitespace(match[1]));
             if (!flags) return;
+            const lineText = normalizeWhitespace(stripExpressHtmlTags(String(line || "").replace(/^\s*\d{1,4}\.\s*/u, "")));
+            if (state.expressMode && /^не\s+делиться(?=$|[^\p{L}\d_])/iu.test(lineText)) return;
             const lookahead = lines.slice(index + 1, index + 4).map(item => normalizeWhitespace(item));
             if (flags.has("other") && !lookahead.some(item => /^other:\s*yes\b/iu.test(item))) patchedLines.push("other: yes");
-            if (flags.has("exclusive") && !lookahead.some(item => /^exclusive:\s*yes\b/iu.test(item))) patchedLines.push("exclusive: yes");
-            if (flags.has("fix") && !lookahead.some(item => /^fix:\s*yes\b/iu.test(item))) patchedLines.push("fix: yes");
+            if (scriptQuestionType(q) === "Multi" && flags.has("exclusive") && !lookahead.some(item => /^exclusive:\s*yes\b/iu.test(item))) patchedLines.push("exclusive: yes");
+            if (scriptQuestionType(q) === "Multi" && flags.has("fix") && !lookahead.some(item => /^fix:\s*yes\b/iu.test(item))) patchedLines.push("fix: yes");
           });
           lines.splice(0, lines.length, ...patchedLines);
         }
@@ -7544,6 +7868,7 @@ final: ${escapeHtml(draft.final_code || "")}
       let clean = normalizeWhitespace(value);
       if (!clean) return clean;
       clean = clean
+        .replace(/\s*<\/?(?:i|em)\b[^>]*>\s*$/giu, "")
         .replace(/\s*(?:[-–—,;:]|\(|\[)?\s*(?:заверш\p{L}*|законч\p{L}*)\s+(?:(?:опрос|анкет\p{L}*)\s+)?(?:со\s+статусом\s*)?[«"“„']?\s*(?:complete|комплит\p{L}*)?[»"”']?\s*[\])]?$/iu, "")
         .replace(/\s*(?:[-–—,;:]?\s*)?[\(\[][^)\]]*(?:complete|комплит\p{L}*|законч\p{L}*|заверш\p{L}*)[^)\]]*[\)\]]\s*$/iu, "")
         .replace(/\s*(?:[-–—,;:\/]|\(|\[)?\s*(?:открыт(?:ый|ая|ое|ые)?(?:\s+(?:ответ|вопрос))?|exclusive|эксклюзив(?:н(?:ый|ая|ое|ые))?|исключающ(?:ий|ая|ее|ие|их|его|ему|им)?(?:\s+вариант\p{L}*)?)\s*[\])]?$/iu, "")
@@ -7560,9 +7885,7 @@ final: ${escapeHtml(draft.final_code || "")}
         "открытый",
         "открытая",
         "открытое",
-        "открытые",
-        "завершить",
-        "закончить"
+        "открытые"
       ];
       const lower = clean.toLowerCase();
       let cutIndex = -1;
