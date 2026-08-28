@@ -66,8 +66,8 @@ function extractBlocks(dom, numbering = null) {
     if (local === "p") {
       const runs = trimFormattedRuns(getFormattedRuns(node));
       const text = runs.map(run => run.text).join("");
-      if (!text) return;
       const listNumber = nextParagraphListNumber(paragraphNumberSpec(node, numbering), numberingCounters);
+      if (!text) return;
       const changeMarks = blockChangeMarks(node, runs);
       blocks.push({
         id: blocks.length,
