@@ -1044,7 +1044,7 @@
           instructions.push(text);
           return;
         }
-        const option = parseOption(optionTextFromBlock(block));
+        const option = parseOption(optionTextFromBlock(block), optionCodeSourceFromBlock(block));
         if (option) {
           optionBlocks.push(block.id);
           options.push({ ...option, html_text: parseOptionHtml(block.id, option), source_block: block.id });
@@ -1098,6 +1098,7 @@
       if (innerStartCandidate) warnings.push(`Внутри диапазона найден возможный старт нового вопроса: блок ${innerStartCandidate.id}`);
       if (normalizeCode(parsed.code) !== parsed.code) warnings.push(`Лейбл будет нормализован: ${parsed.code} -> ${normalizeCode(parsed.code)}`);
       missingOptionCodeWarnings(options).forEach(warning => warnings.push(warning));
+      optionCodeQualityWarnings(options).forEach(warning => warnings.push(warning));
 
       const needsReview = warnings.length > 0 || optionsTableBlocks.length > 0 || type === "Unknown";
       const confidence = needsReview ? 0.62 : 0.9;
@@ -1121,13 +1122,14 @@
       };
     }
 
-    function parseOption(text) {
+    function parseOption(text, codeSource = "explicit") {
       const match = text.match(/^\s*(\d{1,4}|99|999|9998|9999)\s*(?:[.)]|[|])\s*(.+)$/u);
       if (!match) return null;
       const body = match[2].replace(/^\|\s*/, "").trim();
       return {
         code: match[1],
         text: body,
+        code_source: codeSource,
         flags: inferOptionFlags(match[1], body)
       };
     }
@@ -1151,6 +1153,7 @@
         const option = {
           code: codeText,
           text: optionText,
+          code_source: "explicit",
           html_text: refHtml(textBlock.block.id, { mode: "option" }),
           condition: optionCondition,
           flags: inferOptionFlags(codeText, [optionText, optionCondition].filter(Boolean).join(" ")),
@@ -1371,7 +1374,8 @@
         const code = normalizeWhitespace(option?.code || "");
         return {
           ...option,
-          code
+          code,
+          code_source: option?.code_source || (code ? "explicit" : "missing")
         };
       });
     }
@@ -1391,7 +1395,56 @@
     function refreshMissingOptionCodeWarnings(q) {
       if (!q) return;
       const stableWarnings = (q.warnings || []).filter(warning => !String(warning || "").startsWith("Нет кода варианта ответа:"));
-      q.warnings = uniqueStrings([...stableWarnings, ...missingOptionCodeWarnings(q.options || [])]);
+      q.warnings = uniqueStrings([...stableWarnings, ...missingOptionCodeWarnings(q.options || []), ...optionCodeQualityWarnings(q.options || [])]);
+    }
+
+    function tailOptionTextKind(text) {
+      const clean = normalizeWhitespace(stripHtmlTags(text || "")).toLowerCase();
+      if (!clean) return "";
+      if (/^(?:затрудняюсь\s+ответить|затруднилась\s+ответить|затруднились\s+ответить|не\s+знаю|не\s+помню)(?=$|[^\p{L}\d_])/iu.test(clean)) return "Затрудняюсь ответить";
+      if (/^друго(?:е|й|ая|ие|го|му|им)(?=$|[^\p{L}\d_])/iu.test(clean)) return "Другое";
+      if (/^отказ\s+от\s+ответа(?=$|[^\p{L}\d_])/iu.test(clean)) return "Отказ от ответа";
+      if (/^(?:ни\s+один|ничего|никак(?:ой|ая|ое|ие|их))\b/iu.test(clean)) return "Ни один из перечисленных";
+      return "";
+    }
+
+    function isTailOptionCode(code) {
+      return /^(?:97|98|99|997|998|999|9998|9999)$/.test(String(code || "").trim());
+    }
+
+    function optionCodeQualityWarnings(options) {
+      const warnings = [];
+      const normalizedOptions = (options || [])
+        .map(option => ({
+          code: normalizeWhitespace(option?.code || ""),
+          text: normalizeWhitespace(stripHtmlTags(option?.text || option?.html_text || "")),
+          codeSource: option?.code_source || (option?.code ? "explicit" : "missing")
+        }))
+        .filter(option => option.code || option.text);
+
+      normalizedOptions.forEach((option) => {
+        if (tailOptionTextKind(option.text) && option.codeSource === "word_numbering" && option.code && !isTailOptionCode(option.code)) {
+          warnings.push(`Код ${option.code} для "${option.text}" взят из Word-нумерации; проверьте код в анкете.`);
+        }
+      });
+
+      const numericCodes = normalizedOptions
+        .filter(option => /^\d{1,4}$/.test(option.code) && !isTailOptionCode(option.code))
+        .map(option => Number(option.code));
+      const uniqueNumericCodes = new Set(numericCodes);
+      if (numericCodes.length >= 2 && uniqueNumericCodes.size === numericCodes.length) {
+        if (numericCodes.some((code, index) => index > 0 && code < numericCodes[index - 1])) {
+          warnings.push(`Нестандартный порядок кодов вариантов: ${numericCodes.join(", ")}.`);
+        }
+        for (let index = 1; index < numericCodes.length; index += 1) {
+          const previous = numericCodes[index - 1];
+          const current = numericCodes[index];
+          if (current > previous + 1 && current - previous <= 20) {
+            warnings.push(`Возможен пропущенный код варианта: после ${previous} сразу ${current}.`);
+          }
+        }
+      }
+      return uniqueStrings(warnings);
     }
 
     function uniqueNumberList(values) {
@@ -2473,10 +2526,15 @@
       return /(?:^|[\s.?!;:])((?:КОНТРОЛЬ\s+РАВЕНСТВА\s+ПРОПОРЦИЙ|ВОЗМОЖЕН\s+ВЫБОР\s+НЕСКОЛЬКИХ\s+ВАРИАНТОВ|ОДИН\s+(?:ВАРИАНТ\s+)?ОТВЕТА?|МНОЖЕСТВЕНН(?:ЫЙ|ЫЕ)\s+(?:ОТВЕТ|ВЫБОР)|ВЫБОР\s+\d{1,2}\s*-?\s*Х?\s+ВАРИАНТОВ|(?:ДО|МАКС\.?|МАКСИМУМ)\s+(?:\d{1,2}\s*-?\s*Х?|\p{L}+)\s+(?:ОТВЕТ|ВАРИАНТ)|РОТАЦИЯ|РОТИРОВАТЬ|ПОКАЗЫВАЕМ[^.?!;:]*(?:ЛОГОТИП|ЛОГО|КРЕАТИВ|КАРТИНК|ИЗОБРАЖЕНИ|ФОТО))[^.?!;:]*(?:[.?!;:]|$))/giu;
     }
 
+    function expressInlineMaxInstructionPattern() {
+      return /(?:^|[\s.?!;:(])((?:(?:\u0434\u043e|\u043d\u0435\s+\u0431\u043e\u043b\u0435\u0435|\u043c\u0430\u043a\u0441\.?|\u043c\u0430\u043a\u0441\u0438\u043c\u0443\u043c)\s*(?:\d{1,2}\s*-?\s*\u0445?|\p{L}+)\s+(?:\u043e\u0442\u0432\u0435\u0442|\u0432\u0430\u0440\u0438\u0430\u043d\u0442)\p{L}*))(?:[\s)\].?!;:]|$)/giu;
+    }
+
     function extractInlineServiceInstructions(text) {
       const clean = normalizeWhitespace(text);
       if (!clean) return [];
-      return uniqueStrings([...clean.matchAll(inlineServiceInstructionPattern()), ...clean.matchAll(proportionControlInlinePattern())]
+      const expressMaxMatches = state.expressMode ? [...clean.matchAll(expressInlineMaxInstructionPattern())] : [];
+      return uniqueStrings([...clean.matchAll(inlineServiceInstructionPattern()), ...clean.matchAll(proportionControlInlinePattern()), ...expressMaxMatches]
         .map(match => normalizeWhitespace(match[1]))
         .filter(Boolean));
     }
@@ -2492,6 +2550,12 @@
         const prefix = offset > 0 && !/^\s/.test(match) ? " " : "";
         return prefix;
       });
+      if (state.expressMode) {
+        clean = clean.replace(expressInlineMaxInstructionPattern(), (match, instruction, offset) => {
+          const prefix = offset > 0 && !/^\s/.test(match) ? " " : "";
+          return prefix;
+        });
+      }
       return normalizeWhitespace(clean);
     }
 
@@ -2499,7 +2563,8 @@
       const sourceRuns = Array.isArray(runs) ? runs : [];
       const sourceText = sourceRuns.map(run => run.text || "").join("");
       if (!sourceText) return [];
-      const ranges = [...sourceText.matchAll(inlineServiceInstructionPattern()), ...sourceText.matchAll(proportionControlInlinePattern())]
+      const expressMaxMatches = state.expressMode ? [...sourceText.matchAll(expressInlineMaxInstructionPattern())] : [];
+      const ranges = [...sourceText.matchAll(inlineServiceInstructionPattern()), ...sourceText.matchAll(proportionControlInlinePattern()), ...expressMaxMatches]
         .map(match => ({
           start: match.index,
           end: match.index + match[0].length,
@@ -2591,8 +2656,8 @@
       return /(?:^|[^\p{L}\d_])(?:\u043a\u0430\u043a\u0438\u0435|\u043a\u0430\u043a\u0438\u0445|\u043a\u0430\u043a\u0438\u043c\u0438|\u043a\u0430\u043a\u0438\u043c)(?=$|[^\p{L}\d_])/iu.test(clean);
     }
 
-    function parseExpressOption(text) {
-      return parseOption(text);
+    function parseExpressOption(text, codeSource = "explicit") {
+      return parseOption(text, codeSource);
     }
 
     function optionTextFromBlock(block) {
@@ -2601,6 +2666,14 @@
       if (parseOption(text)) return text;
       const listNumber = normalizeWhitespace(block?.listNumber || "");
       return listNumber ? `${listNumber}. ${text}` : text;
+    }
+
+    function optionCodeSourceFromBlock(block) {
+      const text = normalizeWhitespace(block?.text || "");
+      if (!text) return "missing";
+      if (parseOption(text)) return "explicit";
+      const listNumber = normalizeWhitespace(block?.listNumber || "");
+      return listNumber ? "word_numbering" : "missing";
     }
 
     function expressOptionText(block) {
@@ -2623,7 +2696,7 @@
           seenInstruction = true;
           return;
         }
-        const option = parseExpressOption(optionText);
+        const option = parseExpressOption(optionText, optionCodeSourceFromBlock(block));
         if (option) {
           optionBlocks.push(block.id);
           options.push({ ...option, html_text: refHtml(block.id, { mode: "option" }), source_block: block.id });
@@ -2713,9 +2786,22 @@
         })
         .filter(Boolean);
       if (optionRows.length >= Math.min(2, nonEmptyRows.length)) {
+        const tableWarnings = nonEmptyRows
+          .map((row, index) => {
+            const code = String(row[0] || "").replace(/[.)]+$/g, "");
+            if (/^\d{1,4}$/.test(code)) return "";
+            const hasPreviousCode = nonEmptyRows.slice(0, index).some(previousRow => /^\d{1,4}$/.test(String(previousRow[0] || "").replace(/[.)]+$/g, "")));
+            const hasNextCode = nonEmptyRows.slice(index + 1).some(nextRow => /^\d{1,4}$/.test(String(nextRow[0] || "").replace(/[.)]+$/g, "")));
+            if (!hasPreviousCode || !hasNextCode) return "";
+            const text = tableOptionTextFromRow(row);
+            if (!text || isSeparatedOptionServiceText(text)) return "";
+            return `В таблице найден вариант ответа без кода: "${text}".`;
+          })
+          .filter(Boolean);
         const options = optionRows.map(row => ({
           code: row.code,
           text: row.text,
+          code_source: "explicit",
           condition: row.condition,
           flags: inferOptionFlags(row.code, [row.text, row.condition].filter(Boolean).join(" "))
         }));
@@ -2727,6 +2813,7 @@
           options,
           rows: [],
           columns: [],
+          warnings: tableWarnings,
           beforeCode: buildSeparatedOptionBeforeCode(showRules, options)
         };
       }
@@ -2882,6 +2969,7 @@
             options.push(...parsedTable.options.map(option => ({ ...option, source_block: block.id })));
             rows.push(...parsedTable.rows);
             columns.push(...parsedTable.columns);
+            (parsedTable.warnings || []).forEach(warning => warnings.push(warning));
             if (parsedTable.beforeCode) {
               scriptBeforeCode = [scriptBeforeCode, parsedTable.beforeCode].filter(Boolean).join("\n\n");
               warnings.push("Р›РѕРіРёРєР° РїРѕРєР°Р·Р° РІР°СЂРёР°РЅС‚РѕРІ РёР· С‚Р°Р±Р»РёС†С‹ РїРµСЂРµРЅРµСЃРµРЅР° РІ before; РїСЂРѕРІРµСЂСЊС‚Рµ РєРѕРґ.");
@@ -2943,6 +3031,8 @@
         return refCleanTitleHtml(id, idx === 0);
       }).filter(Boolean).join(" ").trim() || cleanExpressTitleHtml(base.title_html || "") || escapeHtml(title);
 
+      missingOptionCodeWarnings(options).forEach(warning => warnings.push(warning));
+      optionCodeQualityWarnings(options).forEach(warning => warnings.push(warning));
       const finalWarnings = (expressDetected?.options?.length || separatedDetected?.options?.length)
         ? warnings.filter(warning => !/options/i.test(String(warning || "")) && !/options\s+не\s+найдены/iu.test(String(warning || "")))
         : warnings;
@@ -4563,14 +4653,16 @@ final: ${escapeHtml(draft.final_code || "")}
         const text = refText(ref);
         if (state.expressMode && isExpressServiceOptionText(text)) return null;
         const parsedText = state.expressMode ? expressOptionText(block || { text }) : optionTextFromBlock(block || { text });
-        const parsed = text ? (state.expressMode ? parseExpressOption(parsedText) : parseOption(parsedText)) : null;
-        return parsed ? { ...parsed, html_text: parseOptionHtml(ref, parsed), source_block: ref } : { code: "", text: text || "", html_text: refHtml(ref, { mode: "option" }), flags: [], source_block: ref };
+        const codeSource = optionCodeSourceFromBlock(block || { text });
+        const parsed = text ? (state.expressMode ? parseExpressOption(parsedText, codeSource) : parseOption(parsedText, codeSource)) : null;
+        return parsed ? { ...parsed, html_text: parseOptionHtml(ref, parsed), source_block: ref } : { code: "", text: text || "", code_source: "missing", html_text: refHtml(ref, { mode: "option" }), flags: [], source_block: ref };
       }).filter(Boolean);
       const parsedTables = q.options_table_blocks
         .filter(ref => !isIgnored(ref))
         .map(ref => parseTableStructure(state.blocks.find(block => block.id === refBase(ref))?.table))
         .filter(Boolean);
       q.options = [...q.options, ...parsedTables.flatMap(table => (table.options || []).map(option => ({ ...option, source_block: "table" })))];
+      parsedTables.flatMap(table => table.warnings || []).forEach(warning => q.warnings.push(warning));
       q.options = withGuaranteedOptionCodes(q.options);
       refreshMissingOptionCodeWarnings(q);
       q.rows = parsedTables.flatMap(table => table.rows || []);
@@ -5673,6 +5765,11 @@ final: ${escapeHtml(draft.final_code || "")}
         lines.push("</code>");
       }
 
+      const warningLines = scriptWarningLines(q);
+      if (warningLines.length) {
+        lines.push(...warningLines);
+      }
+
       if (optionLines.length) {
         lines.push("options:");
         lines.push(...optionLines);
@@ -5682,11 +5779,6 @@ final: ${escapeHtml(draft.final_code || "")}
       if (headingLines.length) {
         lines.push("headings:");
         lines.push(...headingLines);
-      }
-
-      const warningLines = scriptWarningLines(q);
-      if (warningLines.length) {
-        lines.push(...warningLines);
       }
 
       return lines.join("\n");
@@ -7303,7 +7395,23 @@ final: ${escapeHtml(draft.final_code || "")}
       return hasGenderWord && hasMale && hasFemale;
     }
 
+    function inferExpressMaxAnswers(q) {
+      const text = normalizeWhitespace(questionInstructionContextTexts(q).join(" ")).toLowerCase();
+      const numberPattern = "(\\d{1,2}(?:\\s*-?\\s*х)?|одн(?:ого|у|им|ин)|дв(?:ух|а|е)|тр[её]х|три|четыр[её]х|четыре|пяти|пять|шести|шесть|семи|семь|восьми|восемь|девяти|девять|десяти|десять)";
+      const wordEnd = "(?=$|[^\\p{L}\\d_])";
+      const match = text.match(new RegExp(`(?:до\\s+${numberPattern}\\s+(?:вариант|ответ)[а-яё]*|(?:максимум|макс\\.?)\\s*${numberPattern}(?:\\s+(?:вариант|ответ)[а-яё]*)?)${wordEnd}`, "iu"));
+      const explicitMatch = match || text.match(new RegExp(`(?:\\u043d\\u0435\\s+\\u0431\\u043e\\u043b\\u0435\\u0435)\\s+${numberPattern}\\s+(?:\\u0432\\u0430\\u0440\\u0438\\u0430\\u043d\\u0442|\\u043e\\u0442\\u0432\\u0435\\u0442)[\\u0430-\\u044f\\u0451]*${wordEnd}`, "iu"));
+      const shortHyphenMatch = hasMultiTypeInstruction(text)
+        ? text.match(new RegExp(`\\u0434\\u043e\\s+${numberPattern}(?:\\s*-?\\s*\\u0445)${wordEnd}`, "iu"))
+        : null;
+      const finalMatch = explicitMatch || shortHyphenMatch;
+      if (!finalMatch) return null;
+      const value = parseRussianSmallNumber(finalMatch[1] || finalMatch[2] || "");
+      return Number.isInteger(value) && value > 0 ? value : null;
+    }
+
     function inferMaxAnswers(q) {
+      if (state.expressMode) return inferExpressMaxAnswers(q);
       const text = normalizeWhitespace(questionInstructionContextTexts(q).join(" ")).toLowerCase();
       const numberPattern = "(\\d{1,2}(?:\\s*-?\\s*х)?|одн(?:ого|у|им|ин)|дв(?:ух|а|е)|тр[её]х|три|четыр[её]х|четыре|пяти|пять|шести|шесть|семи|семь|восьми|восемь|девяти|девять|десяти|десять)";
       const wordEnd = "(?=$|[^\\p{L}\\d_])";
@@ -7313,17 +7421,7 @@ final: ${escapeHtml(draft.final_code || "")}
         if (Number.isInteger(explicitValue) && explicitValue > 0) return explicitValue;
       }
       const match = text.match(new RegExp(`(?:множественн(?:ый|ые)\\s+(?:выбор|ответ)[а-яё]*\\s+)?до\\s+${numberPattern}\\s+(?:вариант|ответ)[а-яё]*${wordEnd}|(?:не\\s+более|максимум)\\s+${numberPattern}(?:\\s+(?:вариант|ответ)[а-яё]*)?${wordEnd}|макс\\.?\\s*${numberPattern}${wordEnd}|выбор\\s+${numberPattern}\\s+вариант[а-яё]*${wordEnd}`, "iu"));
-      if (!match) {
-        const title = normalizeWhitespace(stripHtmlTags(q?.title || q?.title_html || "")).toLowerCase();
-        if (/для чего вы хотите нанять репетитора или записаться на допуроки/iu.test(title)) return 5;
-        if (/(?:^|[^\p{L}\d_])\u043a\u0430\u043a\u0438\u0445\s+\u0440\u0435\u0437\u0443\u043b\u044c\u0442\u0430\u0442/iu.test(title)) return 3;
-        if ((q?.type === "Multi" || (q?.type !== "Single" && hasExpressPluralQuestionCue(title)))
-          && hasExpressPluralQuestionCue(title)
-          && !/^\u0432\s+\u043a\u0430\u043a\u0438\u0445\s+\u0437\u0430\u0434\u0430\u0447/iu.test(title)) {
-          return 3;
-        }
-        return null;
-      }
+      if (!match) return null;
       const value = parseRussianSmallNumber(match[1] || match[2] || match[3] || match[4]);
       return Number.isInteger(value) && value > 0 ? value : null;
     }
@@ -7944,7 +8042,11 @@ final: ${escapeHtml(draft.final_code || "")}
     }
 
     function scriptWarningLines(q) {
-      return [];
+      return uniqueStrings(q?.warnings || [])
+        .map(warning => normalizeWhitespace(String(warning || "")))
+        .filter(Boolean)
+        .filter(warning => /^(?:В таблице найден вариант ответа без кода|Нет кода варианта ответа):/iu.test(warning))
+        .map(warning => `// warning: ${decodeScriptQuoteEntities(warning)}`);
     }
 
     const BIRTH_DATE_MATRIX_HTML1_LINES = [
