@@ -5134,7 +5134,7 @@ final: ${escapeHtml(draft.final_code || "")}
         if (nextQuestion && nextQuestion.status !== "ignored" && isAgeIntervalQuestionAfterBirthDate(nextQuestion)) {
           blocks.push(buildAgeIntervalQuestionBlock(nextQuestion, { useExplicitCode: true }));
         }
-        else if (isAgeIntervalQuestion(q) || hasAgeIntervalOptions(q)) {
+        else {
           blocks.push(buildAgeIntervalQuestionBlock(q));
         }
         return blocks;
@@ -5816,12 +5816,13 @@ final: ${escapeHtml(draft.final_code || "")}
     }
 
     function isBirthDateQuestion(q) {
-      if (!q || (q.kind || "question") === "info") return false;
+      if (!q) return false;
       const text = normalizeWhitespace([
         q.title || "",
+        stripHtmlTags(q.title_html || ""),
         ...(q.instructions || [])
       ].join(" "));
-      const hasBirthDate = /\u0434\u0430\u0442[а-яё]*\s+\u0440\u043e\u0436\u0434\u0435\u043d/i.test(text);
+      const hasBirthDate = /\u0434\u0430\u0442[\u0430-\u044f\u0451]*(?:\s+[\u0430-\u044f\u0451]{1,20}){0,3}\s+\u0440\u043e\u0436\u0434\u0435\u043d/iu.test(text);
       const isChildBirthDate = /\u0440\u0435\u0431\u0435\u043d|\u0434\u0435\u0442/i.test(text);
       return hasBirthDate && !isChildBirthDate;
     }
@@ -5830,6 +5831,7 @@ final: ${escapeHtml(draft.final_code || "")}
       if (!q || (q.kind || "question") === "info") return false;
       const text = normalizeWhitespace([
         q.title || "",
+        stripHtmlTags(q.title_html || ""),
         ...(q.instructions || [])
       ].join(" "));
       return /\u0432\u043e\u0437\u0440\u0430\u0441\u0442/i.test(text)
@@ -5943,7 +5945,26 @@ final: ${escapeHtml(draft.final_code || "")}
     function buildAgeIntervalQuestionCode(q, useExplicitCode = false) {
       const code = scriptQuestionCode(q);
       if (useExplicitCode || /age$/i.test(code)) return code;
+      const explicitCode = explicitAgeIntervalQuestionCode(q, code);
+      if (explicitCode) return explicitCode;
       return `${code}age`;
+    }
+
+    function explicitAgeIntervalQuestionCode(q, baseCode) {
+      const base = normalizeCode(baseCode || scriptQuestionCode(q));
+      const texts = [
+        ...(q?.instructions || []),
+        q?.title || ""
+      ];
+      for (const text of texts) {
+        const parsed = parseQuestionStart(normalizeWhitespace(text || ""));
+        if (!parsed?.code) continue;
+        const rest = normalizeWhitespace(parsed.titlePart || "");
+        if (!/(?:\u0437\u0430\u043a\u043e\u0434\u0438\u0440|\u0438\u043d\u0442\u0435\u0440\u0432\u0430\u043b|\u0432\u043e\u0437\u0440\u0430\u0441\u0442)/iu.test(rest)) continue;
+        const code = normalizeCode(parsed.code);
+        if (code && code.toLowerCase() !== base.toLowerCase()) return code;
+      }
+      return "";
     }
 
     function buildAgeIntervalQuestionBlock(q, settings = {}) {
