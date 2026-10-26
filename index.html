@@ -1350,7 +1350,7 @@
       const normalizedText = String(text || "").trim();
       if (state.expressMode) {
         if (!expressOptionHasClosedMarker(normalizedText) && (isExpressOtherOptionText(normalizedText) || expressOptionHasOpenMarker(normalizedText))) flags.push("other");
-        if (regularOptionHasExplicitExclusiveMarker(normalizedText) || regularOptionLooksNoneExclusive(normalizedText, normalizedCode)) {
+        if (expressOptionHasExclusiveMarker(normalizedText) || expressOptionLooksNoneExclusive(normalizedText, normalizedCode)) {
           flags.push("exclusive");
           flags.push("fix");
         }
@@ -2055,7 +2055,7 @@
     function applyAutoScriptSettings(q) {
       if (!q) return;
       if (applyHiddenAutocodeSettings(q)) return;
-      applyGeoDefaults(q);
+      if (!state.expressMode) applyGeoDefaults(q);
       if (hasAgeIntervalOptions(q)) {
         q.script_before_code = "";
         q.script_options_randomize = false;
@@ -6337,7 +6337,8 @@ final: ${escapeHtml(draft.final_code || "")}
       const codes = inferExpressCompleteCodes(q);
       if (!codes.length) return "";
       const variable = "${$q->questionCode}";
-      if (scriptQuestionType(q) === "Multi") {
+      const isMulti = Number(inferMaxAnswers(q)) > 1 || scriptQuestionType(q) === "Multi";
+      if (isMulti) {
         if (codes.length === 1) return `if (in_array(${codes[0]},${variable})) $q->finish('complete');`;
         return `if (count(array_intersect(${variable},[${codes.join(",")}]))) $q->finish('complete');`;
       }
@@ -7155,6 +7156,10 @@ final: ${escapeHtml(draft.final_code || "")}
     function scriptHtml2Lines(q, maxAnswers = null) {
       if (state.expressMode) return [];
       const lines = [];
+      if (isGeoCityQuestion(q) && !isCustomGeoCityQuestion(q)) {
+        const otherOption = geoOtherOption(q);
+        lines.push(`<div class="es__question-badge">Начните вводить название города и выберите нужный из списка. Если Вашего города не найдено - отметьте "${decodeScriptQuoteEntities(escapeHtml(otherOption.text))}"</div>`);
+      }
       if (hasSingleQuestionImageCue(q)) {
         lines.push(...singleQuestionImageHtml2Lines(q));
       }
@@ -7299,10 +7304,6 @@ final: ${escapeHtml(draft.final_code || "")}
       html = stripQuestionCodePrefixFromTitleHtml(html, q);
       html = normalizeTextblueSpacing(html);
       html = restoreTitleTrailingQuestionMark(html, q);
-      if (isGeoCityQuestion(q) && !isCustomGeoCityQuestion(q) && !/es__question-badge/.test(html)) {
-        const otherOption = geoOtherOption(q);
-        html += `<div class="es__question-badge">Начните вводить название города и выберите нужный из списка. Если Вашего города не найдено - отметьте "${escapeHtml(otherOption.text)}"</div>`;
-      }
       return decodeScriptQuoteEntities(html);
     }
 
@@ -7327,7 +7328,7 @@ final: ${escapeHtml(draft.final_code || "")}
 
     function restoreTitleTrailingQuestionMark(html, q) {
       const value = String(html || "").trim();
-      if (!value || /[?？]\s*(?:<\/[^>]+>\s*)*$/.test(value)) return value;
+      if (!value || /[?？]\s*[»"'’”]?\s*$/u.test(normalizeWhitespace(stripHtmlTags(value)))) return value;
       const sourceRefs = uniqueStrings([
         ...(q?.title_blocks || []),
         q?.start_block,
@@ -7339,9 +7340,11 @@ final: ${escapeHtml(draft.final_code || "")}
         .filter(Boolean)
         .join(" ");
       const plainValue = normalizeWhitespace(stripHtmlTags(value));
-      const rawQuestion = /[?？]\s*$/.test(normalizeWhitespace(sourceText));
+      const rawQuestion = /[?？]\s*[»"'’”]?\s*$/u.test(normalizeWhitespace(sourceText));
       const looksLikeQuestion = /(?:^|[^\p{L}\d_])(?:как|какие|каких|какой|какая|какое|каким|какими|где|когда|сколько|почему|зачем|влияет\s+ли|есть\s+ли|используете\s+ли|замечаете\s+ли|поощряет\s+ли|смотрите\s+ли|продаете\s+ли)(?=$|[^\p{L}\d_])/iu.test(plainValue);
-      return rawQuestion || (state.expressMode && shouldInferMissingQuestionMark(plainValue)) ? `${value}?` : value;
+      if (!rawQuestion && !(state.expressMode && shouldInferMissingQuestionMark(plainValue))) return value;
+      const beforeClosingQuote = value.replace(/([»"'’”]\s*(?:<\/[^>]+>\s*)*)$/u, "?$1");
+      return beforeClosingQuote !== value ? beforeClosingQuote : `${value}?`;
     }
 
     function shouldInferMissingQuestionMark(text) {
@@ -7389,7 +7392,7 @@ final: ${escapeHtml(draft.final_code || "")}
     function scriptQuestionType(q) {
       if (!q) return "Unknown";
       if ((q.kind || "question") === "info") return "Info";
-      if (isGeoCityQuestion(q)) return "Single";
+      if (!state.expressMode && isGeoCityQuestion(q)) return "Single";
       if (isGenderQuestion(q)) return "Single";
       if (state.expressMode) {
         const maxAnswers = inferMaxAnswers(q);
@@ -7473,6 +7476,7 @@ final: ${escapeHtml(draft.final_code || "")}
       const flags = new Set(Array.isArray(option?.flags) ? option.flags : []);
       let text = normalizeWhitespace(option?.text || "");
       let htmlText = normalizeHtmlWhitespace(option?.htmlText || option?.html_text || escapeHtml(text));
+      const hasColoredExclusiveMarker = expressOptionHasColoredExclusiveMarker(htmlText);
       const plainSourceText = normalizeWhitespace(stripExpressHtmlTags([htmlText, option?.html_text, text].filter(Boolean).join(" ")));
       if (flags.has("other") && !isExpressOtherOptionText(plainSourceText)) {
         flags.delete("other");
@@ -7488,12 +7492,12 @@ final: ${escapeHtml(draft.final_code || "")}
       htmlText = stripExpressTrailingMarker(htmlText, completePattern);
       text = stripExpressGotoMarker(text);
       htmlText = stripExpressGotoMarker(htmlText);
-      const markerPattern = /(?:\s*(?:[-–—,;:\/]|\(|\[)\s*)?(открыт(?:ый|ая|ое|ые)(?:\s+(?:ответ|вопрос))?|exclusive|эксклюзив(?:н(?:ый|ая|ое|ые))?|исключающ(?:ий|ая|ее|ие|их|его|ему|им)?(?:\s+вариант\p{L}*)?)(?:\s*[\])])?\s*$/iu;
+      const markerPattern = /(?:\s*(?:[-–—,;:\/]|\(|\[)\s*)?(открыт(?:ый|ая|ое|ые)(?:\s+(?:ответ|вопрос))?|exclusive|эксклюзив|эксклюзивн(?:ый|ая|ое|ые)\s+вариант\p{L}*|исключающ(?:ий|ая|ее|ие|их|его|ему|им)?(?:\s+вариант\p{L}*)?)(?:\s*[\])])?\s*$/iu;
       const markerSource = normalizeWhitespace(stripExpressHtmlTags([htmlText, text].filter(Boolean).join(" ")));
       if (expressOptionHasOpenMarker(markerSource)) {
         flags.add("other");
       }
-      if (expressOptionHasExclusiveMarker(markerSource)) {
+      if (hasColoredExclusiveMarker || expressOptionHasExclusiveMarker(markerSource)) {
         flags.add("exclusive");
         flags.add("fix");
       }
@@ -7546,7 +7550,49 @@ final: ${escapeHtml(draft.final_code || "")}
 
     function expressOptionHasExclusiveMarker(value) {
       const clean = normalizeWhitespace(stripExpressHtmlTags(value || ""));
-      return /(?:^|[^\p{L}\d_])(?:exclusive|эксклюзив(?:н(?:ый|ая|ое|ые))?|исключающ(?:ий|ая|ее|ие|их|его|ему|им)?(?:\s+вариант\p{L}*)?)(?=$|[^\p{L}\d_])/iu.test(clean);
+      return /(?:^|[\s\-–—,;:\/(\[])(?:exclusive|эксклюзив|эксклюзивн(?:ый|ая|ое|ые)\s+вариант\p{L}*|исключающ(?:ий|ая|ее|ие|их|его|ему|им)?(?:\s+вариант\p{L}*)?)(?:\s*[\])])?\s*$/iu.test(clean);
+    }
+
+    function expressOptionLooksNoneExclusive(text, code = "") {
+      const clean = normalizeWhitespace(stripExpressHtmlTags(text || "")).toLowerCase();
+      if (!clean) return false;
+      const normalizedCode = String(code || "").trim();
+      if (/^\u043d\u0435\s+\u0434\u0435\u043b\u0438\u0442\u044c\u0441\u044f(?=$|[^\p{L}\d_])/iu.test(clean)) return false;
+      if (/(?:^|[^\p{L}\d_])(?:\u043d\u0438\u0447\u0435\u0433\u043e|\u043d\u0438\u043a\u0430\u043a(?:\u0438\u0435|\u0438\u0445|\u0438\u043c|\u0438\u043c\u0438)|\u043d\u0438\u043a\u043e\u043c\u0443|\u043d\u0438\u043a\u043e\u0433\u043e|\u043d\u0438\u043a\u0442\u043e|\u043d\u0438\s+\u043e\u0434\u0438\u043d|\u043d\u0438\s+\u0432\s+\u043a\u0430\u043a\p{L}*|\u043d\u0438\s+\u043d\u0430\s+\u043a\u0430\u043a\p{L}*)(?=$|[^\p{L}\d_])/iu.test(clean)) return true;
+      if (/^(?:\u044f\s+)?(?:\u043d\u0435\s+\u0437\u043d\u0430\p{L}*|\u043d\u0435\s+\u043f\u043e\u043c\u043d\p{L}*|\u0437\u0430\u0442\u0440\u0443\u0434\u043d\p{L}*\s+\u043e\u0442\u0432\u0435\u0442\p{L}*|none of the above)(?=$|[^\p{L}\d_])/iu.test(clean)) return true;
+      if (/(?:^|[^\p{L}\d_])(?:\u043d\u0435\s+\u0441\u0442\u0430\u043b\u043a\p{L}*|\u043f\u0440\u0435\u043f\u044f\u0442\u0441\u0442\u0432\p{L}*\s+\u043d\u0435\u0442|\u043d\u0435\u0442\s+\u0437\u043d\u0430\u0447\u0438\u043c\p{L}*\s+\u043f\u0440\u0435\u043f\u044f\u0442\u0441\u0442\u0432\p{L}*|\u0440\u0435\u0430\u043b\u044c\u043d\p{L}*\s+\u043f\u043e\u043c\u043e\u0449\p{L}*\s+\u043d\u0435\u0442|\u043d\u0435\s+\u043f\u043e\u043b\u044c\u0437\p{L}*|\u043d\u0435\s+\u043f\u043e\u043a\u0443\u043f\p{L}*|\u043d\u0435\s+\u0434\u0435\u043b\p{L}*|\u043d\u0435\s+\u0441\u043b\u044b\u0448\p{L}*|\u043d\u0435\s+\u043f\u0440\u0438\u043d\u0438\u043c\p{L}*\s+\u0443\u0447\u0430\u0441\u0442\p{L}*)(?=$|[^\p{L}\d_])/iu.test(clean)) return true;
+      return /^(?:97|99|999|9999)$/.test(normalizedCode) && /(?:\u043d\u0435\s+\u0437\u043d\u0430\p{L}*|\u043d\u0435\s+\u043f\u043e\u043c\u043d\p{L}*|\u0437\u0430\u0442\u0440\u0443\u0434\u043d|\u043d\u0438\u0447\u0435\u0433\u043e|\u043d\u0438\u043a\u0430\u043a|none of the above)/iu.test(clean);
+    }
+
+    function expressOptionHasTerminalMarker(value) {
+      const clean = normalizeWhitespace(stripExpressHtmlTags(value || ""));
+      return /(?:screen\s*out|screenout|complete|\u043a\u043e\u043c\u043f\u043b\u0438\u0442\p{L}*|\u043a\u043e\u043c\u043f\u043b\u0438\u0442\p{L}*|(?:\u0437\u0430\u0432\u0435\u0440\u0448|\u0437\u0430\u043a\u043e\u043d\u0447)\p{L}*\s+(?:\u043e\u043f\u0440\u043e\u0441|\u0430\u043d\u043a\u0435\u0442)\p{L}*|\u0441\u0442\u0430\u0442\u0443\u0441\p{L}*\s+[\u00ab"'\u201c\u201e]?(?:complete|\u043a\u043e\u043c\u043f\u043b\u0438\u0442\p{L}*|\u043a\u043e\u043c\u043b\u043f\u0438\u0442\p{L}*))/iu.test(clean);
+    }
+
+    function isExpressExclusiveMarkerText(value) {
+      const clean = normalizeWhitespace(stripExpressHtmlTags(value || ""))
+        .replace(/^[\s\-–—,;:\/(\[]+|[\s\-–—,;:\/\])]+$/gu, "");
+      return /^(?:exclusive|эксклюзив(?:н(?:ый|ая|ое|ые))?(?:\s+вариант\p{L}*)?|исключающ(?:ий|ая|ее|ие|их|его|ему|им)?(?:\s+вариант\p{L}*)?)$/iu.test(clean);
+    }
+
+    function expressOptionHasColoredExclusiveMarker(value) {
+      const html = String(value || "");
+      const coloredParts = [];
+      const spanPattern = /<span\b[^>]*(?:style="[^"]*color[^"]*"|style='[^']*color[^']*'|class="[^"]*\btextblue\b[^"]*"|class='[^']*\btextblue\b[^']*')[^>]*>([\s\S]*?)<\/span>/giu;
+      const fontPattern = /<font\b[^>]*color=[^>]*>([\s\S]*?)<\/font>/giu;
+      for (const match of html.matchAll(spanPattern)) coloredParts.push(match[1]);
+      for (const match of html.matchAll(fontPattern)) coloredParts.push(match[1]);
+      return coloredParts.some(isExpressExclusiveMarkerText);
+    }
+
+    function shouldExpressOptionBeExclusive(settings = {}) {
+      if (String(settings.questionType || "") !== "Multi") return false;
+      if ((settings.flags || []).some(flag => String(flag).toLowerCase() === "exclusive")) return true;
+      const markerValues = Array.isArray(settings.markerValues) ? settings.markerValues : [];
+      if (markerValues.some(expressOptionHasColoredExclusiveMarker)) return true;
+      if (markerValues.some(expressOptionHasExclusiveMarker)) return true;
+      if (markerValues.some(expressOptionHasTerminalMarker)) return true;
+      return expressOptionLooksNoneExclusive(settings.text || "", settings.code || "");
     }
 
     function expressQuestionContextHasMarkedOption(q, optionText, markerKind) {
@@ -7557,8 +7603,8 @@ final: ${escapeHtml(draft.final_code || "")}
       if (!context) return false;
       const markerPattern = markerKind === "open"
         ? "открыт(?:ый|ая|ое|ые)?(?:\\s+(?:ответ|вопрос))?"
-        : "(?:exclusive|эксклюзив(?:н(?:ый|ая|ое|ые))?|исключающ(?:ий|ая|ее|ие|их|его|ему|им)?(?:\\s+вариант\\p{L}*)?)";
-      return new RegExp(`${escapeRegExp(cleanOption)}\\s*(?:[-–—,;:\\/]\\s*)?${markerPattern}`, "iu").test(context);
+        : "(?:exclusive|эксклюзив|эксклюзивн(?:ый|ая|ое|ые)\\s+вариант\\p{L}*|исключающ(?:ий|ая|ее|ие|их|его|ему|им)?(?:\\s+вариант\\p{L}*)?)";
+      return new RegExp(`${escapeRegExp(cleanOption)}\\s*(?:[-–—,;:\\/]\\s*)?${markerPattern}(?=$|[^\\p{L}\\d_])`, "iu").test(context);
     }
 
     function normalizeRegularOptionServiceMarker(option) {
@@ -7625,11 +7671,11 @@ final: ${escapeHtml(draft.final_code || "")}
 
     function stripExpressServiceHtmlMarkers(value) {
       let clean = String(value || "");
-      const serviceTextPattern = /(?:^|\s|[-\u2013\u2014вЂ“вЂ”,;:\/])(?:complete|\u043a\u043e\u043c\u043f\u043b\u0438\u0442|\u0437\u0430\u043a\u043e\u043d\u0447\w*|\u0437\u0430\u0432\u0435\u0440\u0448\w*|\u043e\u0442\u043a\u0440\u044b\u0442(?:\u044b\u0439|\u0430\u044f|\u043e\u0435|\u044b\u0435)?(?:\s+(?:\u043e\u0442\u0432\u0435\u0442|\u0432\u043e\u043f\u0440\u043e\u0441))?|exclusive|\u044d\u043a\u0441\u043a\u043b\u044e\u0437\u0438\u0432(?:\u043d(?:\u044b\u0439|\u0430\u044f|\u043e\u0435|\u044b\u0435))?|\u0438\u0441\u043a\u043b\u044e\u0447\u0430\u044e\u0449(?:\u0438\u0439|\u0430\u044f|\u0435\u0435|\u0438\u0435|\u0438\u0445|\u0435\u0433\u043e|\u0435\u043c\u0443|\u0438\u043c)?(?:\s+\u0432\u0430\u0440\u0438\u0430\u043d\u0442\p{L}*)?|РєРѕРјРїР»РёС‚|Р·Р°РєРѕРЅС‡\w*|Р·Р°РІРµСЂС€\w*|РѕС‚РєСЂС‹С‚(?:С‹Р№|Р°СЏ|РѕРµ|С‹Рµ)?(?:\s+(?:РѕС‚РІРµС‚|РІРѕРїСЂРѕСЃ))?)\s*$/iu;
+      const serviceTextPattern = /^(?:complete|\u043a\u043e\u043c\u043f\u043b\u0438\u0442|\u0437\u0430\u043a\u043e\u043d\u0447\p{L}*|\u0437\u0430\u0432\u0435\u0440\u0448\p{L}*|\u043e\u0442\u043a\u0440\u044b\u0442(?:\u044b\u0439|\u0430\u044f|\u043e\u0435|\u044b\u0435)?(?:\s+(?:\u043e\u0442\u0432\u0435\u0442|\u0432\u043e\u043f\u0440\u043e\u0441))?|exclusive|\u044d\u043a\u0441\u043a\u043b\u044e\u0437\u0438\u0432(?:\u043d(?:\u044b\u0439|\u0430\u044f|\u043e\u0435|\u044b\u0435))?|\u0438\u0441\u043a\u043b\u044e\u0447\u0430\u044e\u0449(?:\u0438\u0439|\u0430\u044f|\u0435\u0435|\u0438\u0435|\u0438\u0445|\u0435\u0433\u043e|\u0435\u043c\u0443|\u0438\u043c)?(?:\s+\u0432\u0430\u0440\u0438\u0430\u043d\u0442\p{L}*)?)$/iu;
       for (let guard = 0; guard < 3; guard += 1) {
-        const spanMatch = clean.match(/(?:\s*(?:[-\u2013\u2014вЂ“вЂ”,;:\/]|\(|\[)\s*)?<span\b[^>]*>\s*([^<]+?)\s*<\/span>\s*$/iu);
-        if (!spanMatch || !serviceTextPattern.test(spanMatch[1])) break;
-        clean = clean.slice(0, spanMatch.index).replace(/\s*[-\u2013\u2014вЂ“вЂ”,;:([]\s*$/u, "").trim();
+        const spanMatch = clean.match(/(?:\s*(?:[-\u2013\u2014,;:\/]|\(|\[)\s*)?<span\b[^>]*>\s*([^<]+?)\s*<\/span>\s*$/iu);
+        if (!spanMatch || !serviceTextPattern.test(normalizeWhitespace(spanMatch[1]))) break;
+        clean = clean.slice(0, spanMatch.index).replace(/\s*[-\u2013\u2014,;:(\[]\s*$/u, "").trim();
       }
       return clean;
     }
@@ -7651,7 +7697,8 @@ final: ${escapeHtml(draft.final_code || "")}
       let clean = String(value || "");
       clean = clean.replace(/(?:\s*(?:[-\u2013\u2014,;:]|\(|\[)\s*)?<span\b[^>]*>([\s\S]*?)<\/span>\s*$/giu, (match, inner) => {
         const plain = normalizeWhitespace(stripExpressHtmlTags(inner));
-        return /(\u0434\u043e\u043f\s+\u0440\u0430\u0437\u0440\u0435\u0437|\u0434\u043e\u043f\s+\u0440\u0430\u0437\u0440\u0435\u0437\u044b|\u0434\u043e\u043f\s+\u0440\u0430\u0437\u0440\u0435\u0437|complete|\u043a\u043e\u043c\u043f\u043b\u0438\u0442|\u0437\u0430\u043a\u043e\u043d\u0447\w*|\u0437\u0430\u0432\u0435\u0440\u0448\w*|\u043e\u0442\u043a\u0440\u044b\u0442(?:\u044b\u0439|\u0430\u044f|\u043e\u0435|\u044b\u0435)?|\u044d\u043a\u0441\u043a\u043b\u044e\u0437\u0438\u0432(?:\u043d\u044b\u0439|\u043d\u0430\u044f|\u043d\u043e\u0435|\u043d\u044b\u0435)?)/iu.test(plain) ? "" : match;
+        const otherServiceMarker = /(\u0434\u043e\u043f\s+\u0440\u0430\u0437\u0440\u0435\u0437|\u0434\u043e\u043f\s+\u0440\u0430\u0437\u0440\u0435\u0437\u044b|\u0434\u043e\u043f\s+\u0440\u0430\u0437\u0440\u0435\u0437|complete|\u043a\u043e\u043c\u043f\u043b\u0438\u0442|\u0437\u0430\u043a\u043e\u043d\u0447\w*|\u0437\u0430\u0432\u0435\u0440\u0448\w*|\u043e\u0442\u043a\u0440\u044b\u0442(?:\u044b\u0439|\u0430\u044f|\u043e\u0435|\u044b\u0435)?)/iu.test(plain);
+        return otherServiceMarker || isExpressExclusiveMarkerText(plain) ? "" : match;
       });
       clean = clean.replace(/<span\b[^>]*(?:style="[^"]*color[^"]*"|style='[^']*color[^']*'|class="[^"]*\btextblue\b[^"]*"|class='[^']*\btextblue\b[^']*')[^>]*>([\s\S]*?)<\/span>/giu, "$1");
       clean = clean.replace(/<\/?span\b[^>]*>/giu, "");
@@ -7747,22 +7794,33 @@ final: ${escapeHtml(draft.final_code || "")}
       }
 
       const lines = [];
+      const exportsAsMultiQuestion = (state.expressMode && Number(inferMaxAnswers(q)) > 1)
+        || scriptQuestionType(q) === "Multi";
       const rotationFixedCodes = new Set(state.expressMode ? extractRotationExceptCodesSafe(q) : extractRotationFixedCodes(q));
       const rotationOnlyCodes = rotationFixedCodes.size ? new Set() : new Set(extractRotationOnlyCodes(q));
       options.forEach((option, optionIndex) => {
+        const sourceOptionMarkup = state.expressMode
+          ? [option?.htmlText, option?.html_text, option?.text].filter(Boolean).join(" ")
+          : "";
         const sourceOptionMarker = state.expressMode
-          ? normalizeWhitespace(stripExpressHtmlTags([option?.htmlText, option?.html_text, option?.text].filter(Boolean).join(" ")))
+          ? normalizeWhitespace(stripExpressHtmlTags(sourceOptionMarkup))
           : "";
         option = state.expressMode ? normalizeExpressOptionMarker(option) : normalizeRegularOptionServiceMarker(option);
+        const normalizedOptionMarkup = state.expressMode
+          ? [option?.htmlText, option?.text].filter(Boolean).join(" ")
+          : "";
         const normalizedOptionMarker = state.expressMode
-          ? normalizeWhitespace(stripExpressHtmlTags([option?.htmlText, option?.text].filter(Boolean).join(" ")))
+          ? normalizeWhitespace(stripExpressHtmlTags(normalizedOptionMarkup))
           : "";
         const code = normalizeWhitespace(option.code || "");
         const sourceQuestionOption = state.expressMode && code
           ? (q.options || []).find(item => normalizeWhitespace(item?.code || "") === code)
           : null;
-        const sourceQuestionOptionMarker = sourceQuestionOption
-          ? normalizeWhitespace(stripExpressHtmlTags([sourceQuestionOption?.htmlText, sourceQuestionOption?.html_text, sourceQuestionOption?.text].filter(Boolean).join(" ")))
+        const sourceQuestionOptionMarkup = sourceQuestionOption
+          ? [sourceQuestionOption?.htmlText, sourceQuestionOption?.html_text, sourceQuestionOption?.text].filter(Boolean).join(" ")
+          : "";
+        const sourceQuestionOptionMarker = sourceQuestionOptionMarkup
+          ? normalizeWhitespace(stripExpressHtmlTags(sourceQuestionOptionMarkup))
           : "";
         const sourceQuestionOptionFlags = new Set(Array.isArray(sourceQuestionOption?.flags) ? sourceQuestionOption.flags : []);
         let text = option.htmlText || escapeHtml(option.text || "");
@@ -7782,7 +7840,7 @@ final: ${escapeHtml(draft.final_code || "")}
         text = stripOpenFieldInstructionArtifacts(text);
         text = stripOptionFillLine(text);
         const flags = new Set(option.flags);
-        const isMultiQuestion = scriptQuestionType(q) === "Multi";
+        const isMultiQuestion = exportsAsMultiQuestion;
         if (generatedSource) {
           flags.delete("fix");
           if (code === "98") flags.delete("other");
@@ -7790,8 +7848,22 @@ final: ${escapeHtml(draft.final_code || "")}
         const exportsRandomize = shouldExportOptionsRandomize(q);
         const isGroupedRotationExport = q.script_rotation_mode === "groups";
         const optionMarkerSource = [text, option.condition].filter(Boolean).join(" ");
+        const expressExclusiveDetected = state.expressMode && shouldExpressOptionBeExclusive({
+          questionType: isMultiQuestion ? "Multi" : scriptQuestionType(q),
+          code,
+          text: optionMarkerSource,
+          markerValues: [sourceQuestionOptionMarkup, sourceOptionMarkup, normalizedOptionMarkup, optionMarkerSource],
+          flags: [...sourceQuestionOptionFlags, ...flags]
+        });
+        const expressTerminalDetected = state.expressMode && [
+          sourceQuestionOptionMarkup,
+          sourceOptionMarkup,
+          normalizedOptionMarkup,
+          optionMarkerSource
+        ].some(expressOptionHasTerminalMarker);
         if (!flags.has("other") && (state.expressMode ? (isExpressOtherOptionText(optionMarkerSource) || expressQuestionContextHasMarkedOption(q, text, "open")) : isRegularOtherOptionText(optionMarkerSource, code))) flags.add("other");
-        if (isMultiQuestion && !flags.has("exclusive") && (state.expressMode ? expressQuestionContextHasMarkedOption(q, text, "exclusive") : (regularOptionHasExplicitExclusiveMarker(optionMarkerSource) || regularOptionLooksNoneExclusive(optionMarkerSource, code)))) flags.add("exclusive");
+        if (isMultiQuestion && !flags.has("exclusive") && (state.expressMode ? expressExclusiveDetected : (regularOptionHasExplicitExclusiveMarker(optionMarkerSource) || regularOptionLooksNoneExclusive(optionMarkerSource, code)))) flags.add("exclusive");
+        if (expressTerminalDetected && exportsRandomize) flags.add("fix");
         if (exportsRandomize && rotationFixedCodes.size && !rotationFixedCodes.has(String(code)) && !flags.has("other") && !flags.has("exclusive")) flags.delete("fix");
         if (exportsRandomize && !isGroupedRotationExport && rotationOnlyCodes.size && !rotationOnlyCodes.has(String(code))) flags.add("fix");
         if (exportsRandomize && !isGroupedRotationExport && rotationFixedCodes.has(String(code))) flags.add("fix");
@@ -7814,7 +7886,13 @@ final: ${escapeHtml(draft.final_code || "")}
           if (!hasExpressClosedMarker && (expressOptionHasOpenMarker(sourceOptionMarker) || isExpressOtherOptionText(sourceOptionMarker) || expressOptionHasOpenMarker(finalMarkerSource) || isExpressOtherOptionText(finalMarkerSource) || expressQuestionContextHasMarkedOption(q, finalMarkerSource, "open"))) {
             flags.add("other");
           }
-          if (isMultiQuestion && (expressOptionHasExclusiveMarker(finalMarkerSource) || expressQuestionContextHasMarkedOption(q, finalMarkerSource, "exclusive"))) {
+          if (isMultiQuestion && shouldExpressOptionBeExclusive({
+            questionType: "Multi",
+            code,
+            text: finalMarkerSource,
+            markerValues: [sourceQuestionOptionMarkup, sourceOptionMarkup, normalizedOptionMarkup, finalMarkerSource],
+            flags: [...sourceQuestionOptionFlags, ...flags]
+          })) {
             flags.add("exclusive");
             flags.add("fix");
           }
@@ -7828,7 +7906,13 @@ final: ${escapeHtml(draft.final_code || "")}
         }
         const hasExpressClosedMarker = state.expressMode && (expressOptionHasClosedMarker(sourceQuestionOptionMarker) || expressOptionHasClosedMarker(sourceOptionMarker) || expressOptionHasClosedMarker(normalizedOptionMarker));
         const needsExpressOtherFlag = state.expressMode && !hasExpressClosedMarker && (sourceQuestionOptionFlags.has("other") || expressOptionHasOpenMarker(sourceQuestionOptionMarker) || isExpressOtherOptionText(sourceQuestionOptionMarker) || expressOptionHasOpenMarker(sourceOptionMarker) || isExpressOtherOptionText(sourceOptionMarker) || expressOptionHasOpenMarker(normalizedOptionMarker) || isExpressOtherOptionText(normalizedOptionMarker));
-        const needsExpressExclusiveFlag = state.expressMode && isMultiQuestion && (sourceQuestionOptionFlags.has("exclusive") || expressOptionHasExclusiveMarker(sourceQuestionOptionMarker) || expressOptionHasExclusiveMarker(sourceOptionMarker) || expressOptionHasExclusiveMarker(normalizedOptionMarker));
+        const needsExpressExclusiveFlag = state.expressMode && shouldExpressOptionBeExclusive({
+          questionType: isMultiQuestion ? "Multi" : scriptQuestionType(q),
+          code,
+          text: decodeScriptQuoteEntities(text),
+          markerValues: [sourceQuestionOptionMarkup, sourceOptionMarkup, normalizedOptionMarkup, text],
+          flags: [...sourceQuestionOptionFlags, ...flags]
+        });
         let optionLineText = decodeScriptQuoteEntities(text);
         if (state.expressMode && code === "1" && optionLineText.startsWith("\u0412\u0438\u0434\u0435\u043e\u0441\u0432\u044f\u0437\u044c")) {
           optionLineText = optionLineText.replace(/\s+(\u0437\u0432\u0443\u043a\u0430\s+\u0438\s+\u0438\u0437\u043e\u0431\u0440\u0430\u0436\u0435\u043d\u0438\u044f)/iu, "  $1");
@@ -7859,8 +7943,8 @@ final: ${escapeHtml(draft.final_code || "")}
             if (state.expressMode && /^не\s+делиться(?=$|[^\p{L}\d_])/iu.test(lineText)) return;
             const lookahead = lines.slice(index + 1, index + 4).map(item => normalizeWhitespace(item));
             if (flags.has("other") && !lookahead.some(item => /^other:\s*yes\b/iu.test(item))) patchedLines.push("other: yes");
-            if (scriptQuestionType(q) === "Multi" && flags.has("exclusive") && !lookahead.some(item => /^exclusive:\s*yes\b/iu.test(item))) patchedLines.push("exclusive: yes");
-            if (scriptQuestionType(q) === "Multi" && flags.has("fix") && !lookahead.some(item => /^fix:\s*yes\b/iu.test(item))) patchedLines.push("fix: yes");
+            if (exportsAsMultiQuestion && flags.has("exclusive") && !lookahead.some(item => /^exclusive:\s*yes\b/iu.test(item))) patchedLines.push("exclusive: yes");
+            if (exportsAsMultiQuestion && flags.has("fix") && !lookahead.some(item => /^fix:\s*yes\b/iu.test(item))) patchedLines.push("fix: yes");
           });
           lines.splice(0, lines.length, ...patchedLines);
         }
@@ -7987,7 +8071,6 @@ final: ${escapeHtml(draft.final_code || "")}
       let clean = normalizeWhitespace(value);
       if (!clean) return clean;
       clean = clean
-        .replace(/\s*<\/?(?:i|em)\b[^>]*>\s*$/giu, "")
         .replace(/\s*(?:[-–—,;:]|\(|\[)?\s*(?:заверш\p{L}*|законч\p{L}*)\s+(?:(?:опрос|анкет\p{L}*)\s+)?(?:со\s+статусом\s*)?[«"“„']?\s*(?:complete|комплит\p{L}*)?[»"”']?\s*[\])]?$/iu, "")
         .replace(/\s*(?:[-–—,;:]?\s*)?[\(\[][^)\]]*(?:complete|комплит\p{L}*|законч\p{L}*|заверш\p{L}*)[^)\]]*[\)\]]\s*$/iu, "")
         .replace(/\s*(?:[-–—,;:\/]|\(|\[)?\s*(?:открыт(?:ый|ая|ое|ые)?(?:\s+(?:ответ|вопрос))?|exclusive|эксклюзив(?:н(?:ый|ая|ое|ые))?|исключающ(?:ий|ая|ее|ие|их|его|ему|им)?(?:\s+вариант\p{L}*)?)\s*[\])]?$/iu, "")

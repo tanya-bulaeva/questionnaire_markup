@@ -646,6 +646,7 @@ function hasExplicitCustomGeoOther(q) {
 }
 
 function applyGeoDefaults(q) {
+  if (typeof state !== "undefined" && state.expressMode) return false;
   if (!q || (q.kind || "question") === "info") return false;
   if (!isGeoCityCandidate(q)) return false;
   if (q.geo_city_enabled === false) return false;
@@ -670,6 +671,7 @@ function applyGeoDefaults(q) {
 }
 
 function isGeoCityQuestion(q) {
+  if (typeof state !== "undefined" && state.expressMode) return false;
   return !!q?.geo_city_enabled && isGeoCityCandidate(q);
 }
 
